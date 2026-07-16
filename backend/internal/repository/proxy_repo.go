@@ -34,12 +34,16 @@ func newProxyRepositoryWithSQL(client *dbent.Client, sqlq sqlExecutor) *proxyRep
 func (r *proxyRepository) Create(ctx context.Context, proxyIn *service.Proxy) error {
 	builder := r.client.Proxy.Create().
 		SetName(proxyIn.Name).
+		SetNillableOwnerUserID(proxyIn.OwnerUserID).
+		SetIsPublic(proxyIn.IsPublic).
+		SetKind(normalizeProxyKind(proxyIn.Kind)).
 		SetProtocol(proxyIn.Protocol).
 		SetHost(proxyIn.Host).
 		SetPort(proxyIn.Port).
 		SetStatus(proxyIn.Status).
 		SetFallbackMode(proxyIn.FallbackMode).
-		SetExpiryWarnDays(proxyIn.ExpiryWarnDays)
+		SetExpiryWarnDays(proxyIn.ExpiryWarnDays).
+		SetExtra(normalizeJSONMap(proxyIn.Extra))
 	if proxyIn.Username != "" {
 		builder.SetUsername(proxyIn.Username)
 	}
@@ -93,12 +97,16 @@ func (r *proxyRepository) ListByIDs(ctx context.Context, ids []int64) ([]service
 func (r *proxyRepository) Update(ctx context.Context, proxyIn *service.Proxy) error {
 	builder := r.client.Proxy.UpdateOneID(proxyIn.ID).
 		SetName(proxyIn.Name).
+		SetNillableOwnerUserID(proxyIn.OwnerUserID).
+		SetIsPublic(proxyIn.IsPublic).
+		SetKind(normalizeProxyKind(proxyIn.Kind)).
 		SetProtocol(proxyIn.Protocol).
 		SetHost(proxyIn.Host).
 		SetPort(proxyIn.Port).
 		SetStatus(proxyIn.Status).
 		SetFallbackMode(proxyIn.FallbackMode).
-		SetExpiryWarnDays(proxyIn.ExpiryWarnDays)
+		SetExpiryWarnDays(proxyIn.ExpiryWarnDays).
+		SetExtra(normalizeJSONMap(proxyIn.Extra))
 	if proxyIn.Username != "" {
 		builder.SetUsername(proxyIn.Username)
 	} else {
@@ -142,7 +150,16 @@ func (r *proxyRepository) List(ctx context.Context, params pagination.Pagination
 
 // ListWithFilters lists proxies with optional filtering by protocol, status, and search query
 func (r *proxyRepository) ListWithFilters(ctx context.Context, params pagination.PaginationParams, protocol, status, search string) ([]service.Proxy, *pagination.PaginationResult, error) {
+	return r.listWithFiltersAndOwnerScope(ctx, params, protocol, status, search, "")
+}
+
+func (r *proxyRepository) ListWithOwnerScope(ctx context.Context, params pagination.PaginationParams, protocol, status, search, ownerScope string) ([]service.Proxy, *pagination.PaginationResult, error) {
+	return r.listWithFiltersAndOwnerScope(ctx, params, protocol, status, search, ownerScope)
+}
+
+func (r *proxyRepository) listWithFiltersAndOwnerScope(ctx context.Context, params pagination.PaginationParams, protocol, status, search, ownerScope string) ([]service.Proxy, *pagination.PaginationResult, error) {
 	q := r.client.Proxy.Query()
+	q = applyProxyOwnerScope(q, ownerScope)
 	if protocol != "" {
 		q = q.Where(proxy.ProtocolEQ(protocol))
 	}
@@ -150,7 +167,7 @@ func (r *proxyRepository) ListWithFilters(ctx context.Context, params pagination
 		q = q.Where(proxy.StatusEQ(status))
 	}
 	if search != "" {
-		q = q.Where(proxy.NameContainsFold(search))
+		q = q.Where(proxy.Or(proxy.NameContainsFold(search), proxy.HostContainsFold(search)))
 	}
 
 	total, err := q.Count(ctx)
@@ -180,7 +197,16 @@ func (r *proxyRepository) ListWithFilters(ctx context.Context, params pagination
 
 // ListWithFiltersAndAccountCount lists proxies with filters and includes account count per proxy
 func (r *proxyRepository) ListWithFiltersAndAccountCount(ctx context.Context, params pagination.PaginationParams, protocol, status, search string) ([]service.ProxyWithAccountCount, *pagination.PaginationResult, error) {
+	return r.listWithFiltersAndAccountCountAndOwnerScope(ctx, params, protocol, status, search, "")
+}
+
+func (r *proxyRepository) ListWithAccountCountAndOwnerScope(ctx context.Context, params pagination.PaginationParams, protocol, status, search, ownerScope string) ([]service.ProxyWithAccountCount, *pagination.PaginationResult, error) {
+	return r.listWithFiltersAndAccountCountAndOwnerScope(ctx, params, protocol, status, search, ownerScope)
+}
+
+func (r *proxyRepository) listWithFiltersAndAccountCountAndOwnerScope(ctx context.Context, params pagination.PaginationParams, protocol, status, search, ownerScope string) ([]service.ProxyWithAccountCount, *pagination.PaginationResult, error) {
 	q := r.client.Proxy.Query()
+	q = applyProxyOwnerScope(q, ownerScope)
 	if protocol != "" {
 		q = q.Where(proxy.ProtocolEQ(protocol))
 	}
@@ -188,7 +214,7 @@ func (r *proxyRepository) ListWithFiltersAndAccountCount(ctx context.Context, pa
 		q = q.Where(proxy.StatusEQ(status))
 	}
 	if search != "" {
-		q = q.Where(proxy.NameContainsFold(search))
+		q = q.Where(proxy.Or(proxy.NameContainsFold(search), proxy.HostContainsFold(search)))
 	}
 
 	total, err := q.Count(ctx)
@@ -213,6 +239,17 @@ func (r *proxyRepository) ListWithFiltersAndAccountCount(ctx context.Context, pa
 	}
 
 	return r.buildProxyWithAccountCountResult(ctx, proxies, params, int64(total))
+}
+
+func applyProxyOwnerScope(q *dbent.ProxyQuery, ownerScope string) *dbent.ProxyQuery {
+	switch ownerScope {
+	case service.ResourceOwnerScopeSystem:
+		return q.Where(proxy.OwnerUserIDIsNil())
+	case service.ResourceOwnerScopeUser:
+		return q.Where(proxy.OwnerUserIDNotNil())
+	default:
+		return q
+	}
 }
 
 func (r *proxyRepository) listWithAccountCountSort(ctx context.Context, q *dbent.ProxyQuery, params pagination.PaginationParams, total int) ([]service.ProxyWithAccountCount, *pagination.PaginationResult, error) {
@@ -336,6 +373,16 @@ func (r *proxyRepository) CountAccountsByProxyID(ctx context.Context, proxyID in
 	return count, nil
 }
 
+// CountUserOwnedAccountsByProxyID returns the number of active user-owned accounts
+// that rely on a public system proxy.
+func (r *proxyRepository) CountUserOwnedAccountsByProxyID(ctx context.Context, proxyID int64) (int64, error) {
+	var count int64
+	if err := scanSingleRow(ctx, r.sql, "SELECT COUNT(*) FROM accounts WHERE proxy_id = $1 AND owner_user_id IS NOT NULL AND deleted_at IS NULL", []any{proxyID}, &count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (r *proxyRepository) ListAccountSummariesByProxyID(ctx context.Context, proxyID int64) ([]service.ProxyAccountSummary, error) {
 	rows, err := r.sql.QueryContext(ctx, `
 		SELECT id, name, platform, type, notes
@@ -444,6 +491,9 @@ func proxyEntityToService(m *dbent.Proxy) *service.Proxy {
 	out := &service.Proxy{
 		ID:             m.ID,
 		Name:           m.Name,
+		OwnerUserID:    m.OwnerUserID,
+		IsPublic:       m.IsPublic,
+		Kind:           m.Kind,
 		Protocol:       m.Protocol,
 		Host:           m.Host,
 		Port:           m.Port,
@@ -454,6 +504,7 @@ func proxyEntityToService(m *dbent.Proxy) *service.Proxy {
 		FallbackMode:   m.FallbackMode,
 		BackupProxyID:  m.BackupProxyID,
 		ExpiryWarnDays: m.ExpiryWarnDays,
+		Extra:          copyJSONMap(m.Extra),
 	}
 	if m.Username != nil {
 		out.Username = *m.Username
@@ -462,6 +513,14 @@ func proxyEntityToService(m *dbent.Proxy) *service.Proxy {
 		out.Password = *m.Password
 	}
 	return out
+}
+
+func normalizeProxyKind(kind string) string {
+	kind = strings.TrimSpace(kind)
+	if kind == "" {
+		return "standard"
+	}
+	return kind
 }
 
 func applyProxyEntityToService(dst *service.Proxy, src *dbent.Proxy) {

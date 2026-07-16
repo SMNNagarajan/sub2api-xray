@@ -49,6 +49,12 @@ type UserSubscription struct {
 	MonthlyUsageUsd float64 `json:"monthly_usage_usd,omitempty"`
 	// AssignedBy holds the value of the "assigned_by" field.
 	AssignedBy *int64 `json:"assigned_by,omitempty"`
+	// User who can manage this subscription through /my assigned-subscriptions.
+	ManagedByUserID *int64 `json:"managed_by_user_id,omitempty"`
+	// manual | redeem_code | admin | empty legacy
+	SourceType string `json:"source_type,omitempty"`
+	// SourceRedeemCodeID holds the value of the "source_redeem_code_id" field.
+	SourceRedeemCodeID *int64 `json:"source_redeem_code_id,omitempty"`
 	// AssignedAt holds the value of the "assigned_at" field.
 	AssignedAt time.Time `json:"assigned_at,omitempty"`
 	// Notes holds the value of the "notes" field.
@@ -123,9 +129,9 @@ func (*UserSubscription) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case usersubscription.FieldDailyUsageUsd, usersubscription.FieldWeeklyUsageUsd, usersubscription.FieldMonthlyUsageUsd:
 			values[i] = new(sql.NullFloat64)
-		case usersubscription.FieldID, usersubscription.FieldUserID, usersubscription.FieldGroupID, usersubscription.FieldAssignedBy:
+		case usersubscription.FieldID, usersubscription.FieldUserID, usersubscription.FieldGroupID, usersubscription.FieldAssignedBy, usersubscription.FieldManagedByUserID, usersubscription.FieldSourceRedeemCodeID:
 			values[i] = new(sql.NullInt64)
-		case usersubscription.FieldStatus, usersubscription.FieldNotes:
+		case usersubscription.FieldStatus, usersubscription.FieldSourceType, usersubscription.FieldNotes:
 			values[i] = new(sql.NullString)
 		case usersubscription.FieldCreatedAt, usersubscription.FieldUpdatedAt, usersubscription.FieldDeletedAt, usersubscription.FieldStartsAt, usersubscription.FieldExpiresAt, usersubscription.FieldDailyWindowStart, usersubscription.FieldWeeklyWindowStart, usersubscription.FieldMonthlyWindowStart, usersubscription.FieldAssignedAt:
 			values[i] = new(sql.NullTime)
@@ -244,6 +250,26 @@ func (_m *UserSubscription) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.AssignedBy = new(int64)
 				*_m.AssignedBy = value.Int64
+			}
+		case usersubscription.FieldManagedByUserID:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field managed_by_user_id", values[i])
+			} else if value.Valid {
+				_m.ManagedByUserID = new(int64)
+				*_m.ManagedByUserID = value.Int64
+			}
+		case usersubscription.FieldSourceType:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field source_type", values[i])
+			} else if value.Valid {
+				_m.SourceType = value.String
+			}
+		case usersubscription.FieldSourceRedeemCodeID:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field source_redeem_code_id", values[i])
+			} else if value.Valid {
+				_m.SourceRedeemCodeID = new(int64)
+				*_m.SourceRedeemCodeID = value.Int64
 			}
 		case usersubscription.FieldAssignedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -366,6 +392,19 @@ func (_m *UserSubscription) String() string {
 	builder.WriteString(", ")
 	if v := _m.AssignedBy; v != nil {
 		builder.WriteString("assigned_by=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.ManagedByUserID; v != nil {
+		builder.WriteString("managed_by_user_id=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	builder.WriteString("source_type=")
+	builder.WriteString(_m.SourceType)
+	builder.WriteString(", ")
+	if v := _m.SourceRedeemCodeID; v != nil {
+		builder.WriteString("source_redeem_code_id=")
 		builder.WriteString(fmt.Sprintf("%v", *v))
 	}
 	builder.WriteString(", ")

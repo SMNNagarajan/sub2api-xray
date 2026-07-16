@@ -257,6 +257,7 @@ describe('admin GroupsView column settings', () => {
 
     expect(columnKeys(wrapper)).toEqual([
       'name',
+      'owner_user_id',
       'platform',
       'billing_type',
       'rate_multiplier',
@@ -283,6 +284,7 @@ describe('admin GroupsView column settings', () => {
     expect(columnKeys(wrapper)).toEqual([
       'name',
       'id',
+      'owner_user_id',
       'platform',
       'billing_type',
       'rate_multiplier',
@@ -301,6 +303,7 @@ describe('admin GroupsView column settings', () => {
 
     expect(columnKeys(wrapper)).toEqual([
       'name',
+      'owner_user_id',
       'platform',
       'billing_type',
       'rate_multiplier',
@@ -324,6 +327,7 @@ describe('admin GroupsView column settings', () => {
 
     expect(columnKeys(wrapper)).toEqual([
       'name',
+      'owner_user_id',
       'platform',
       'billing_type',
       'rate_multiplier',
@@ -347,6 +351,7 @@ describe('admin GroupsView column settings', () => {
     expect(columnKeys(wrapper)).toEqual([
       'name',
       'id',
+      'owner_user_id',
       'platform',
       'billing_type',
       'rate_multiplier',

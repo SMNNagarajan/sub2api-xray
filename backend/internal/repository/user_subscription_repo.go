@@ -38,7 +38,10 @@ func (r *userSubscriptionRepository) Create(ctx context.Context, sub *service.Us
 		SetDailyUsageUsd(sub.DailyUsageUSD).
 		SetWeeklyUsageUsd(sub.WeeklyUsageUSD).
 		SetMonthlyUsageUsd(sub.MonthlyUsageUSD).
-		SetNillableAssignedBy(sub.AssignedBy)
+		SetNillableAssignedBy(sub.AssignedBy).
+		SetNillableManagedByUserID(sub.ManagedByUserID).
+		SetSourceType(sub.SourceType).
+		SetNillableSourceRedeemCodeID(sub.SourceRedeemCodeID)
 
 	if sub.StartsAt.IsZero() {
 		builder.SetStartsAt(time.Now())
@@ -138,6 +141,9 @@ func (r *userSubscriptionRepository) Update(ctx context.Context, sub *service.Us
 		SetWeeklyUsageUsd(sub.WeeklyUsageUSD).
 		SetMonthlyUsageUsd(sub.MonthlyUsageUSD).
 		SetNillableAssignedBy(sub.AssignedBy).
+		SetNillableManagedByUserID(sub.ManagedByUserID).
+		SetSourceType(sub.SourceType).
+		SetNillableSourceRedeemCodeID(sub.SourceRedeemCodeID).
 		SetAssignedAt(sub.AssignedAt).
 		SetNotes(sub.Notes)
 
@@ -636,6 +642,9 @@ func userSubscriptionEntityToServiceWithStatusMapping(m *dbent.UserSubscription,
 		WeeklyUsageUSD:     m.WeeklyUsageUsd,
 		MonthlyUsageUSD:    m.MonthlyUsageUsd,
 		AssignedBy:         m.AssignedBy,
+		ManagedByUserID:    m.ManagedByUserID,
+		SourceType:         m.SourceType,
+		SourceRedeemCodeID: m.SourceRedeemCodeID,
 		AssignedAt:         m.AssignedAt,
 		Notes:              derefString(m.Notes),
 		CreatedAt:          m.CreatedAt,

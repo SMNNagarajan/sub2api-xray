@@ -194,11 +194,12 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 
 		upstreamStart := time.Now()
-		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+		resp, err = s.httpUpstream.Do(ProtectUserOwnedUpstreamRequest(upstreamReq, account, proxyURL), proxyURL, account.ID, account.Concurrency)
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if err != nil {
 			// Transport-level failure (proxy/DNS/TCP/TLS — no HTTP response). Convert to
-			// a failover so the handler switches to a healthy account.
+			// a failover so the handler switches to a healthy account. Durable
+			// faults also temporarily remove the account from scheduling.
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
 		}
 		if resp.StatusCode < 400 {

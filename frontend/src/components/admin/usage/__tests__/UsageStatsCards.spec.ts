@@ -63,5 +63,8 @@ describe('UsageStatsCards', () => {
     expect(text).toContain('12')
     expect(text).toContain('Cache Read')
     expect(text).toContain('22')
+    expect(wrapper.html()).toContain('right-0 top-full')
+    expect(wrapper.html()).toContain('w-[min(14rem,calc(100vw-2rem))]')
+    expect(wrapper.html()).toContain('sm:left-1/2 sm:right-auto sm:w-56 sm:-translate-x-1/2')
   })
 })

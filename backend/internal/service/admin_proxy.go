@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -34,6 +35,28 @@ func (s *adminServiceImpl) ListProxiesWithAccountCount(ctx context.Context, page
 	return proxies, result.Total, nil
 }
 
+type proxyOwnerScopeRepository interface {
+	ListWithAccountCountAndOwnerScope(ctx context.Context, params pagination.PaginationParams, protocol, status, search, ownerScope string) ([]ProxyWithAccountCount, *pagination.PaginationResult, error)
+}
+
+type proxyUserOwnedAccountCounter interface {
+	CountUserOwnedAccountsByProxyID(ctx context.Context, proxyID int64) (int64, error)
+}
+
+func (s *adminServiceImpl) ListProxiesWithAccountCountByOwnerScope(ctx context.Context, page, pageSize int, protocol, status, search, ownerScope, sortBy, sortOrder string) ([]ProxyWithAccountCount, int64, error) {
+	repo, ok := s.proxyRepo.(proxyOwnerScopeRepository)
+	if !ok {
+		return nil, 0, infraerrors.ServiceUnavailable("RESOURCE_OWNER_FILTER_UNAVAILABLE", "resource owner filter is not available")
+	}
+	params := pagination.PaginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
+	proxies, result, err := repo.ListWithAccountCountAndOwnerScope(ctx, params, protocol, status, search, ownerScope)
+	if err != nil {
+		return nil, 0, err
+	}
+	s.attachProxyLatency(ctx, proxies)
+	return proxies, result.Total, nil
+}
+
 func (s *adminServiceImpl) GetAllProxies(ctx context.Context) ([]Proxy, error) {
 	return s.proxyRepo.ListActive(ctx)
 }
@@ -56,6 +79,11 @@ func (s *adminServiceImpl) GetProxiesByIDs(ctx context.Context, ids []int64) ([]
 }
 
 func (s *adminServiceImpl) CreateProxy(ctx context.Context, input *CreateProxyInput) (*Proxy, error) {
+	kind := normalizeAdminProxyKind(input.Kind)
+	protocol := strings.ToLower(strings.TrimSpace(input.Protocol))
+	if err := validateAdminProxyMode(kind, protocol, input.Extra); err != nil {
+		return nil, err
+	}
 	// 规范化 fallback_mode
 	mode := input.FallbackMode
 	if mode == "" {
@@ -71,7 +99,9 @@ func (s *adminServiceImpl) CreateProxy(ctx context.Context, input *CreateProxyIn
 
 	proxy := &Proxy{
 		Name:           input.Name,
-		Protocol:       input.Protocol,
+		IsPublic:       input.IsPublic,
+		Kind:           kind,
+		Protocol:       protocol,
 		Host:           input.Host,
 		Port:           input.Port,
 		Username:       input.Username,
@@ -81,6 +111,10 @@ func (s *adminServiceImpl) CreateProxy(ctx context.Context, input *CreateProxyIn
 		FallbackMode:   mode,
 		BackupProxyID:  input.BackupProxyID,
 		ExpiryWarnDays: input.ExpiryWarnDays,
+		Extra:          input.Extra,
+	}
+	if err := s.validateProxyFallbackOwner(ctx, proxy, input.BackupProxyID); err != nil {
+		return nil, err
 	}
 	if err := s.proxyRepo.Create(ctx, proxy); err != nil {
 		return nil, err
@@ -112,13 +146,50 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	if err != nil {
 		return nil, err
 	}
+	kind := proxy.Kind
+	if strings.TrimSpace(input.Kind) != "" {
+		kind = normalizeAdminProxyKind(input.Kind)
+	}
+	protocol := proxy.Protocol
+	if strings.TrimSpace(input.Protocol) != "" {
+		protocol = strings.ToLower(strings.TrimSpace(input.Protocol))
+	}
+	extra := proxy.Extra
+	if input.Extra != nil {
+		extra = input.Extra
+	}
+	if err := validateAdminProxyMode(kind, protocol, extra); err != nil {
+		return nil, err
+	}
+	if input.IsPublic != nil && *input.IsPublic && proxy.OwnerUserID != nil {
+		return nil, infraerrors.BadRequest("PROXY_PUBLIC_OWNER_INVALID", "only system proxies can be public")
+	}
+	if input.IsPublic != nil && proxy.OwnerUserID == nil && proxy.IsPublic && !*input.IsPublic {
+		counter, ok := s.proxyRepo.(proxyUserOwnedAccountCounter)
+		if !ok {
+			return nil, infraerrors.ServiceUnavailable("PROXY_PUBLIC_USAGE_CHECK_UNAVAILABLE", "cannot verify public proxy usage")
+		}
+		count, err := counter.CountUserOwnedAccountsByProxyID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if count > 0 {
+			return nil, infraerrors.Conflict("PROXY_PUBLIC_IN_USE", "public proxy is still used by user-owned accounts")
+		}
+	}
+	if err := s.validateProxyFallbackOwner(ctx, proxy, input.BackupProxyID); err != nil {
+		return nil, err
+	}
 
 	if input.Name != "" {
 		proxy.Name = input.Name
 	}
-	if input.Protocol != "" {
-		proxy.Protocol = input.Protocol
+	if input.IsPublic != nil {
+		proxy.IsPublic = *input.IsPublic
 	}
+	proxy.Kind = kind
+	proxy.Protocol = protocol
+	proxy.Extra = extra
 	if input.Host != "" {
 		proxy.Host = input.Host
 	}
@@ -140,10 +211,70 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	proxy.BackupProxyID = input.BackupProxyID
 	proxy.ExpiryWarnDays = input.ExpiryWarnDays
 
+	if err := DefaultXrayRuntimeManager().Stop(id); err != nil {
+		return nil, fmt.Errorf("stop previous xray runtime: %w", err)
+	}
 	if err := s.proxyRepo.Update(ctx, proxy); err != nil {
 		return nil, err
 	}
 	return proxy, nil
+}
+
+func normalizeAdminProxyKind(kind string) string {
+	normalized := strings.ToLower(strings.TrimSpace(kind))
+	if normalized == "" {
+		return "standard"
+	}
+	return normalized
+}
+
+func validateAdminProxyMode(kind, protocol string, extra map[string]any) error {
+	standardProtocols := map[string]struct{}{"http": {}, "https": {}, "socks5": {}, "socks5h": {}}
+	xrayProtocols := map[string]struct{}{"vmess": {}, "vless": {}, "trojan": {}, "ss": {}}
+
+	switch kind {
+	case "standard":
+		if _, ok := standardProtocols[protocol]; !ok {
+			return infraerrors.BadRequest("PROXY_PROTOCOL_INVALID", "standard proxy protocol must be http, https, socks5, or socks5h")
+		}
+	case "xray":
+		if _, ok := xrayProtocols[protocol]; !ok {
+			return infraerrors.BadRequest("PROXY_PROTOCOL_INVALID", "xray proxy protocol must be vmess, vless, trojan, or ss")
+		}
+		raw, _ := extra["raw"].(string)
+		if strings.TrimSpace(raw) == "" {
+			return infraerrors.BadRequest("PROXY_XRAY_RAW_REQUIRED", "xray proxy requires extra.raw node URI")
+		}
+	default:
+		return infraerrors.BadRequest("PROXY_KIND_INVALID", "proxy kind must be standard or xray")
+	}
+	return nil
+}
+
+func (s *adminServiceImpl) validateProxyFallbackOwner(ctx context.Context, current *Proxy, backupID *int64) error {
+	if current == nil || backupID == nil {
+		return nil
+	}
+	if current.ID > 0 && *backupID == current.ID {
+		return infraerrors.BadRequest("PROXY_BACKUP_SELF", "backup proxy cannot be itself")
+	}
+	backup, err := s.proxyRepo.GetByID(ctx, *backupID)
+	if err != nil {
+		return err
+	}
+	if current.OwnerUserID == nil {
+		if backup.OwnerUserID != nil {
+			return infraerrors.BadRequest("PROXY_BACKUP_OWNER_INVALID", "system proxies cannot use user-owned backup proxies")
+		}
+		return nil
+	}
+	if backup.OwnerUserID != nil && *backup.OwnerUserID == *current.OwnerUserID {
+		return nil
+	}
+	if backup.OwnerUserID == nil && backup.IsPublic {
+		return nil
+	}
+	return infraerrors.BadRequest("PROXY_BACKUP_OWNER_INVALID", "user proxies can only use owned or public system backup proxies")
 }
 
 func (s *adminServiceImpl) DeleteProxy(ctx context.Context, id int64) error {
@@ -153,6 +284,9 @@ func (s *adminServiceImpl) DeleteProxy(ctx context.Context, id int64) error {
 	}
 	if count > 0 {
 		return ErrProxyInUse
+	}
+	if err := DefaultXrayRuntimeManager().Stop(id); err != nil {
+		return err
 	}
 	return s.proxyRepo.Delete(ctx, id)
 }
@@ -176,6 +310,13 @@ func (s *adminServiceImpl) BatchDeleteProxies(ctx context.Context, ids []int64) 
 			result.Skipped = append(result.Skipped, ProxyBatchDeleteSkipped{
 				ID:     id,
 				Reason: ErrProxyInUse.Error(),
+			})
+			continue
+		}
+		if err := DefaultXrayRuntimeManager().Stop(id); err != nil {
+			result.Skipped = append(result.Skipped, ProxyBatchDeleteSkipped{
+				ID:     id,
+				Reason: err.Error(),
 			})
 			continue
 		}

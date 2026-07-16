@@ -90,6 +90,9 @@ func mustCreateGroup(t *testing.T, client *dbent.Client, g *service.Group) *serv
 		SetSubscriptionType(g.SubscriptionType).
 		SetRateMultiplier(g.RateMultiplier).
 		SetIsExclusive(g.IsExclusive)
+	if g.OwnerUserID != nil {
+		create.SetOwnerUserID(*g.OwnerUserID)
+	}
 	if g.Description != "" {
 		create.SetDescription(g.Description)
 	}
@@ -203,6 +206,9 @@ func mustCreateAccount(t *testing.T, client *dbent.Client, a *service.Account) *
 		SetStatus(a.Status).
 		SetSchedulable(a.Schedulable).
 		SetErrorMessage(a.ErrorMessage)
+	if a.OwnerUserID != nil {
+		create.SetOwnerUserID(*a.OwnerUserID)
+	}
 
 	if a.ProxyID != nil {
 		create.SetProxyID(*a.ProxyID)

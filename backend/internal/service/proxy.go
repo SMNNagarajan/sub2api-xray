@@ -1,9 +1,11 @@
 package service
 
 import (
+	"context"
 	"net"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -16,6 +18,9 @@ const (
 type Proxy struct {
 	ID             int64
 	Name           string
+	OwnerUserID    *int64
+	IsPublic       bool
+	Kind           string
 	Protocol       string
 	Host           string
 	Port           int
@@ -28,6 +33,7 @@ type Proxy struct {
 	FallbackMode   string
 	BackupProxyID  *int64
 	ExpiryWarnDays int
+	Extra          map[string]any
 }
 
 func (p *Proxy) IsActive() bool {
@@ -40,6 +46,17 @@ func (p *Proxy) IsExpired(now time.Time) bool {
 }
 
 func (p *Proxy) URL() string {
+	if strings.EqualFold(p.Kind, "xray") {
+		resolved, err := DefaultXrayRuntimeManager().ProxyURL(context.Background(), p)
+		if err == nil && resolved != "" {
+			return resolved
+		}
+		return "xray://unavailable/" + strconv.FormatInt(p.ID, 10)
+	}
+	return p.StandardURL()
+}
+
+func (p *Proxy) StandardURL() string {
 	u := &url.URL{
 		Scheme: p.Protocol,
 		Host:   net.JoinHostPort(p.Host, strconv.Itoa(p.Port)),

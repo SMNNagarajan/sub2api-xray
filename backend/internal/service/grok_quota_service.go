@@ -153,7 +153,7 @@ func (s *GrokQuotaService) probeUsage(ctx context.Context, accountID int64) (*Gr
 		applyGrokCLIHeaders(req.Header)
 	}
 
-	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, maxInt(account.Concurrency, 1))
+	resp, err := s.httpUpstream.Do(ProtectUserOwnedUpstreamRequest(req, account, proxyURL), proxyURL, account.ID, maxInt(account.Concurrency, 1))
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadGateway, "GROK_QUOTA_PROBE_REQUEST_FAILED", "upstream probe failed: %v", err)
 	}

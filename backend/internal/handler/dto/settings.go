@@ -275,6 +275,9 @@ type SystemSettings struct {
 	// Available Channels feature switch (user-facing aggregate view)
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
 
+	// User-owned resource workspace switch
+	EnableUserResources bool `json:"enable_user_resources"`
+
 	// 风控中心功能开关
 	RiskControlEnabled bool `json:"risk_control_enabled"`
 
@@ -357,6 +360,8 @@ type PublicSettings struct {
 	ChannelMonitorDefaultIntervalSeconds int  `json:"channel_monitor_default_interval_seconds"`
 
 	AvailableChannelsEnabled bool `json:"available_channels_enabled"`
+
+	EnableUserResources bool `json:"enable_user_resources"`
 
 	AffiliateEnabled bool `json:"affiliate_enabled"`
 

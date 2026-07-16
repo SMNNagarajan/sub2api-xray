@@ -220,6 +220,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		SettingKeyChannelMonitorEnabled,
 		SettingKeyChannelMonitorDefaultIntervalSeconds,
 		SettingKeyAvailableChannelsEnabled,
+		SettingKeyEnableUserResources,
 		SettingKeyAffiliateEnabled,
 		SettingKeyRiskControlEnabled,
 		SettingKeyAllowUserViewErrorRequests,
@@ -331,6 +332,7 @@ func (s *SettingService) GetPublicSettings(ctx context.Context) (*PublicSettings
 		ChannelMonitorDefaultIntervalSeconds: parseChannelMonitorInterval(settings[SettingKeyChannelMonitorDefaultIntervalSeconds]),
 
 		AvailableChannelsEnabled: settings[SettingKeyAvailableChannelsEnabled] == "true",
+		EnableUserResources:      settings[SettingKeyEnableUserResources] == "true",
 
 		AffiliateEnabled: settings[SettingKeyAffiliateEnabled] == "true",
 
@@ -414,6 +416,16 @@ func (s *SettingService) GetAvailableChannelsRuntime(ctx context.Context) Availa
 	}
 }
 
+// IsUserResourcesEnabled checks whether the user-owned resource workspace is enabled.
+// Fail-closed because this feature allows regular users to create schedulable resources.
+func (s *SettingService) IsUserResourcesEnabled(ctx context.Context) bool {
+	vals, err := s.settingRepo.GetMultiple(ctx, []string{SettingKeyEnableUserResources})
+	if err != nil {
+		return false
+	}
+	return vals[SettingKeyEnableUserResources] == "true"
+}
+
 // IsUserErrorViewAllowed reads the user-facing error-requests visibility switch
 // directly from the settings store. Fail-closed: on error returns false (opt-in default).
 func (s *SettingService) IsUserErrorViewAllowed(ctx context.Context) bool {
@@ -494,6 +506,7 @@ type PublicSettingsInjectionPayload struct {
 	ChannelMonitorEnabled                bool `json:"channel_monitor_enabled"`
 	ChannelMonitorDefaultIntervalSeconds int  `json:"channel_monitor_default_interval_seconds"`
 	AvailableChannelsEnabled             bool `json:"available_channels_enabled"`
+	EnableUserResources                  bool `json:"enable_user_resources"`
 	AffiliateEnabled                     bool `json:"affiliate_enabled"`
 	RiskControlEnabled                   bool `json:"risk_control_enabled"`
 	AllowUserViewErrorRequests           bool `json:"allow_user_view_error_requests"`
@@ -559,6 +572,7 @@ func (s *SettingService) GetPublicSettingsForInjection(ctx context.Context) (any
 		ChannelMonitorEnabled:                settings.ChannelMonitorEnabled,
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 		AvailableChannelsEnabled:             settings.AvailableChannelsEnabled,
+		EnableUserResources:                  settings.EnableUserResources,
 		AffiliateEnabled:                     settings.AffiliateEnabled,
 		RiskControlEnabled:                   settings.RiskControlEnabled,
 		AllowUserViewErrorRequests:           settings.AllowUserViewErrorRequests,

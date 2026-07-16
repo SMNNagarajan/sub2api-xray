@@ -635,6 +635,11 @@ export default {
       // Settings Dropdowns
       filterSettings: '筛选设置',
       columnSettings: '列设置',
+      allResourceOwners: '全部资源归属',
+      systemResources: '系统资源',
+      userResources: '用户资源',
+      systemResource: '系统',
+      userResourceOwner: '用户 #{id}',
       filterValue: '输入值',
       // User Attributes
       attributes: {
@@ -736,6 +741,11 @@ export default {
     groups: {
       title: '分组管理',
       description: '管理 API 密钥分组和费率配置',
+      allResourceOwners: '全部资源归属',
+      systemResources: '系统资源',
+      userResources: '用户资源',
+      systemResource: '系统',
+      userResourceOwner: '用户 #{id}',
       searchGroups: '搜索分组...',
       createGroup: '创建分组',
       editGroup: '编辑分组',
@@ -751,6 +761,7 @@ export default {
       columns: {
         name: '名称',
         id: 'ID',
+        owner: '资源归属',
         platform: '平台',
         rateMultiplier: '费率倍数',
         rpmOverride: 'RPM 覆盖',

@@ -367,6 +367,10 @@ const (
 	// sidebar entry is hidden. Defaults to false (opt-in feature).
 	SettingKeyAvailableChannelsEnabled = "available_channels_enabled"
 
+	// SettingKeyEnableUserResources enables user-owned groups/accounts/proxies/redeem codes.
+	// Defaults to false because it exposes self-service resource management.
+	SettingKeyEnableUserResources = "enable_user_resources"
+
 	// =========================
 	// Overload Cooldown (529)
 	// =========================

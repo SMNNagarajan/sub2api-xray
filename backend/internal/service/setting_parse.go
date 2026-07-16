@@ -179,6 +179,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 
 		// Available channels feature (default disabled; opt-in)
 		SettingKeyAvailableChannelsEnabled: "false",
+		SettingKeyEnableUserResources:      "false",
 
 		// Affiliate (邀请返利) feature (default disabled; opt-in)
 		SettingKeyAffiliateEnabled: "false",
@@ -282,6 +283,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 		PurchaseSubscriptionURL:          strings.TrimSpace(settings[SettingKeyPurchaseSubscriptionURL]),
 		CustomMenuItems:                  settings[SettingKeyCustomMenuItems],
 		CustomEndpoints:                  settings[SettingKeyCustomEndpoints],
+		EnableUserResources:              settings[SettingKeyEnableUserResources] == "true",
 		BackendModeEnabled:               settings[SettingKeyBackendModeEnabled] == "true",
 	}
 	result.TableDefaultPageSize, result.TablePageSizeOptions = parseTablePreferences(

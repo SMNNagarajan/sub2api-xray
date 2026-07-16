@@ -189,11 +189,14 @@ func (s *SubscriptionService) invalidateSubscriptionCaches(userID, groupID int64
 
 // AssignSubscriptionInput 分配订阅输入
 type AssignSubscriptionInput struct {
-	UserID       int64
-	GroupID      int64
-	ValidityDays int
-	AssignedBy   int64
-	Notes        string
+	UserID             int64
+	GroupID            int64
+	ValidityDays       int
+	AssignedBy         int64
+	ManagedByUserID    *int64
+	SourceType         string
+	SourceRedeemCodeID *int64
+	Notes              string
 }
 
 // AssignSubscription 分配订阅给用户（不允许重复分配）
@@ -259,7 +262,7 @@ func (s *SubscriptionService) assignOrExtendSubscription(ctx context.Context, in
 			newExpiresAt = MaxExpiresAt
 		}
 
-		if err := s.updateExistingSubscriptionTerm(ctx, existingSub, input.Notes, now, newExpiresAt, isExpired); err != nil {
+		if err := s.updateExistingSubscriptionTerm(ctx, existingSub, input, now, newExpiresAt, isExpired); err != nil {
 			return nil, false, err
 		}
 
@@ -304,14 +307,15 @@ func (s *SubscriptionService) maybeInvalidateAssignmentCaches(userID, groupID in
 func (s *SubscriptionService) updateExistingSubscriptionTerm(
 	ctx context.Context,
 	existingSub *UserSubscription,
-	notes string,
+	input *AssignSubscriptionInput,
 	startsAt time.Time,
 	newExpiresAt time.Time,
 	isExpired bool,
 ) error {
 	return s.withSubscriptionUpdateTx(ctx, func(txCtx context.Context) error {
 		if isExpired {
-			renewed := renewedSubscriptionTerm(existingSub, notes, startsAt, newExpiresAt)
+			renewed := renewedSubscriptionTerm(existingSub, input.Notes, startsAt, newExpiresAt)
+			applySubscriptionAttribution(renewed, input)
 			if err := s.userSubRepo.Update(txCtx, renewed); err != nil {
 				return fmt.Errorf("renew expired subscription: %w", err)
 			}
@@ -331,9 +335,19 @@ func (s *SubscriptionService) updateExistingSubscriptionTerm(
 		}
 
 		// 追加备注
-		if notes != "" {
-			if err := s.userSubRepo.UpdateNotes(txCtx, existingSub.ID, appendSubscriptionNotes(existingSub.Notes, notes)); err != nil {
+		if input.Notes != "" {
+			if err := s.userSubRepo.UpdateNotes(txCtx, existingSub.ID, appendSubscriptionNotes(existingSub.Notes, input.Notes)); err != nil {
 				return fmt.Errorf("update subscription notes: %w", err)
+			}
+		}
+		if input.ManagedByUserID != nil || input.SourceType != "" || input.SourceRedeemCodeID != nil {
+			updated, err := s.userSubRepo.GetByID(txCtx, existingSub.ID)
+			if err != nil {
+				return fmt.Errorf("reload subscription for attribution: %w", err)
+			}
+			applySubscriptionAttribution(updated, input)
+			if err := s.userSubRepo.Update(txCtx, updated); err != nil {
+				return fmt.Errorf("update subscription attribution: %w", err)
 			}
 		}
 
@@ -392,6 +406,21 @@ func appendSubscriptionNotes(existingNotes, newNotes string) string {
 	return existingNotes + "\n" + newNotes
 }
 
+func applySubscriptionAttribution(sub *UserSubscription, input *AssignSubscriptionInput) {
+	if sub == nil || input == nil {
+		return
+	}
+	if input.ManagedByUserID != nil {
+		sub.ManagedByUserID = input.ManagedByUserID
+	}
+	if input.SourceType != "" {
+		sub.SourceType = input.SourceType
+	}
+	if input.SourceRedeemCodeID != nil {
+		sub.SourceRedeemCodeID = input.SourceRedeemCodeID
+	}
+}
+
 // createSubscription 创建新订阅（内部方法）
 func (s *SubscriptionService) createSubscription(ctx context.Context, input *AssignSubscriptionInput) (*UserSubscription, error) {
 	validityDays := input.ValidityDays
@@ -419,6 +448,7 @@ func (s *SubscriptionService) createSubscription(ctx context.Context, input *Ass
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
+	applySubscriptionAttribution(sub, input)
 	// 只有当 AssignedBy > 0 时才设置（0 表示系统分配，如兑换码）
 	if input.AssignedBy > 0 {
 		sub.AssignedBy = &input.AssignedBy

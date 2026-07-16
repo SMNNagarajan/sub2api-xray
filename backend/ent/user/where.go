@@ -1592,6 +1592,29 @@ func HasPromoCodeUsagesWith(preds ...predicate.PromoCodeUsage) predicate.User {
 	})
 }
 
+// HasRedeemCodeUsages applies the HasEdge predicate on the "redeem_code_usages" edge.
+func HasRedeemCodeUsages() predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, RedeemCodeUsagesTable, RedeemCodeUsagesColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasRedeemCodeUsagesWith applies the HasEdge predicate on the "redeem_code_usages" edge with a given conditions (other predicates).
+func HasRedeemCodeUsagesWith(preds ...predicate.RedeemCodeUsage) predicate.User {
+	return predicate.User(func(s *sql.Selector) {
+		step := newRedeemCodeUsagesStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
 // HasPaymentOrders applies the HasEdge predicate on the "payment_orders" edge.
 func HasPaymentOrders() predicate.User {
 	return predicate.User(func(s *sql.Selector) {

@@ -66,6 +66,30 @@ func ProvideOpenAIOAuthService(
 	return svc
 }
 
+func ProvideUserResourceService(
+	db *sql.DB,
+	subscriptionService *SubscriptionService,
+	billingCacheService *BillingCacheService,
+	authCacheInvalidator APIKeyAuthCacheInvalidator,
+	oauthService *OAuthService,
+	openAIOAuthService *OpenAIOAuthService,
+	geminiOAuthService *GeminiOAuthService,
+	antigravityOAuthService *AntigravityOAuthService,
+	grokOAuthService *GrokOAuthService,
+	dashboardService *DashboardService,
+	groupCapacityService *GroupCapacityService,
+	userGroupRateRepo UserGroupRateRepository,
+	proxyProber ProxyExitInfoProber,
+	proxyLatencyCache ProxyLatencyCache,
+) *UserResourceService {
+	svc := NewUserResourceService(db, subscriptionService, billingCacheService, authCacheInvalidator)
+	svc.SetOAuthServices(oauthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService)
+	svc.SetGroupSupportServices(dashboardService, groupCapacityService, userGroupRateRepo)
+	svc.SetProxyObservabilityServices(proxyProber, proxyLatencyCache)
+	svc.StartProxySourceScheduler(time.Minute)
+	return svc
+}
+
 // ProvideTokenRefreshService creates and starts TokenRefreshService
 func ProvideTokenRefreshService(
 	accountRepo AccountRepository,
@@ -645,6 +669,7 @@ var ProviderSet = wire.NewSet(
 	NewOAuthService,
 	ProvideOpenAIOAuthService,
 	NewGrokOAuthService,
+	wire.Bind(new(GrokOAuthTokenService), new(*GrokOAuthService)),
 	NewGeminiOAuthService,
 	NewGeminiQuotaService,
 	NewCompositeTokenCacheInvalidator,
@@ -678,6 +703,7 @@ var ProviderSet = wire.NewSet(
 	ProvideEmailQueueService,
 	NewTurnstileService,
 	NewSubscriptionService,
+	ProvideUserResourceService,
 	wire.Bind(new(DefaultSubscriptionAssigner), new(*SubscriptionService)),
 	ProvideConcurrencyService,
 	ProvideUserMessageQueueService,

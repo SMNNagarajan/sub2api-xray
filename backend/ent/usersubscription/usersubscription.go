@@ -45,6 +45,12 @@ const (
 	FieldMonthlyUsageUsd = "monthly_usage_usd"
 	// FieldAssignedBy holds the string denoting the assigned_by field in the database.
 	FieldAssignedBy = "assigned_by"
+	// FieldManagedByUserID holds the string denoting the managed_by_user_id field in the database.
+	FieldManagedByUserID = "managed_by_user_id"
+	// FieldSourceType holds the string denoting the source_type field in the database.
+	FieldSourceType = "source_type"
+	// FieldSourceRedeemCodeID holds the string denoting the source_redeem_code_id field in the database.
+	FieldSourceRedeemCodeID = "source_redeem_code_id"
 	// FieldAssignedAt holds the string denoting the assigned_at field in the database.
 	FieldAssignedAt = "assigned_at"
 	// FieldNotes holds the string denoting the notes field in the database.
@@ -107,6 +113,9 @@ var Columns = []string{
 	FieldWeeklyUsageUsd,
 	FieldMonthlyUsageUsd,
 	FieldAssignedBy,
+	FieldManagedByUserID,
+	FieldSourceType,
+	FieldSourceRedeemCodeID,
 	FieldAssignedAt,
 	FieldNotes,
 }
@@ -145,6 +154,10 @@ var (
 	DefaultWeeklyUsageUsd float64
 	// DefaultMonthlyUsageUsd holds the default value on creation for the "monthly_usage_usd" field.
 	DefaultMonthlyUsageUsd float64
+	// DefaultSourceType holds the default value on creation for the "source_type" field.
+	DefaultSourceType string
+	// SourceTypeValidator is a validator for the "source_type" field. It is called by the builders before save.
+	SourceTypeValidator func(string) error
 	// DefaultAssignedAt holds the default value on creation for the "assigned_at" field.
 	DefaultAssignedAt func() time.Time
 )
@@ -230,6 +243,21 @@ func ByMonthlyUsageUsd(opts ...sql.OrderTermOption) OrderOption {
 // ByAssignedBy orders the results by the assigned_by field.
 func ByAssignedBy(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAssignedBy, opts...).ToFunc()
+}
+
+// ByManagedByUserID orders the results by the managed_by_user_id field.
+func ByManagedByUserID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldManagedByUserID, opts...).ToFunc()
+}
+
+// BySourceType orders the results by the source_type field.
+func BySourceType(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSourceType, opts...).ToFunc()
+}
+
+// BySourceRedeemCodeID orders the results by the source_redeem_code_id field.
+func BySourceRedeemCodeID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSourceRedeemCodeID, opts...).ToFunc()
 }
 
 // ByAssignedAt orders the results by the assigned_at field.

@@ -68,9 +68,19 @@ function updatePosition() {
   const el = triggerRef.value
   if (!el) return
   const rect = el.getBoundingClientRect()
+  const tooltipWidth = tooltipRef.value?.getBoundingClientRect().width ?? 0
+  const viewportWidth = document.documentElement.clientWidth || window.innerWidth
+  const halfWidth = tooltipWidth / 2
+  const minLeft = 8 + halfWidth
+  const maxLeft = viewportWidth - 8 - halfWidth
+  const desiredLeft = rect.left + rect.width / 2
+  const left = minLeft <= maxLeft
+    ? Math.min(Math.max(desiredLeft, minLeft), maxLeft)
+    : viewportWidth / 2
+
   tooltipStyle.value = {
-    top: `${rect.top + window.scrollY}px`,
-    left: `${rect.left + rect.width / 2 + window.scrollX}px`,
+    top: `${rect.top}px`,
+    left: `${left}px`,
   }
 }
 
@@ -121,7 +131,7 @@ onBeforeUnmount(() => {
         v-show="show"
         role="tooltip"
         :class="[
-          'fixed z-[99999] -translate-x-1/2 -translate-y-full rounded-lg bg-gray-900 p-3 text-xs leading-relaxed text-white shadow-xl ring-1 ring-white/10 dark:bg-gray-800',
+          'fixed z-[99999] max-w-[calc(100vw-1rem)] -translate-x-1/2 -translate-y-full rounded-lg bg-gray-900 p-3 text-xs leading-relaxed text-white shadow-xl ring-1 ring-white/10 dark:bg-gray-800',
           props.widthClass,
         ]"
         :style="{ top: `calc(${tooltipStyle.top} - 8px)`, left: tooltipStyle.left }"

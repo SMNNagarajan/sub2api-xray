@@ -124,6 +124,7 @@ export default {
       status: {
         active: 'Active',
         inactive: 'Inactive',
+        disabled: 'Disabled',
         error: 'Error',
         cooldown: 'Cooldown',
         paused: 'Paused',
@@ -145,6 +146,7 @@ export default {
       columns: {
         name: 'Name',
         id: 'Account ID',
+        owner: 'Resource Owner',
         platformType: 'Platform/Type',
         platform: 'Platform',
         type: 'Type',
@@ -165,6 +167,11 @@ export default {
         expiresAt: 'Expires At',
         actions: 'Actions'
       },
+      allResourceOwners: 'All Resource Owners',
+      systemResources: 'System Resources',
+      userResources: 'User Resources',
+      systemResource: 'System',
+      userResourceOwner: 'User #{id}',
       schedulerScore: {
         baseShort: 'Base',
         stickyShort: 'Sticky',

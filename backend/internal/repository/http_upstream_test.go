@@ -228,6 +228,31 @@ func (s *HTTPUpstreamSuite) TestGetOrCreateClient_InvalidURLReturnsError() {
 	require.Error(s.T(), err, "expected error for invalid proxy URL")
 }
 
+func (s *HTTPUpstreamSuite) TestUserOwnedNetworkPolicyRejectsLoopbackEvenWhenGlobalAllowlistIsDisabled() {
+	s.cfg.Security.URLAllowlist.Enabled = false
+	s.cfg.Security.URLAllowlist.AllowPrivateHosts = true
+	svc := s.newService()
+	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1:1/private", nil)
+	require.NoError(s.T(), err)
+	req = req.WithContext(service.WithHTTPUpstreamNetworkPolicy(req.Context(), service.HTTPUpstreamNetworkPolicy{PublicOnly: true}))
+
+	_, err = svc.Do(req, "", 99, 1)
+	require.Error(s.T(), err)
+	require.Contains(s.T(), err.Error(), "not allowed")
+}
+
+func (s *HTTPUpstreamSuite) TestNetworkPolicyCacheSuffixPreservesDefaultKeys() {
+	require.Empty(s.T(), networkPolicyCacheSuffix(service.HTTPUpstreamNetworkPolicy{}))
+	require.Equal(
+		s.T(),
+		":public-only:127.0.0.1:1080",
+		networkPolicyCacheSuffix(service.HTTPUpstreamNetworkPolicy{
+			PublicOnly:           true,
+			AllowedDialAddresses: []string{"127.0.0.1:1080"},
+		}),
+	)
+}
+
 func (s *HTTPUpstreamSuite) TestOpenAIProfileDefaultsToHTTP2AndNoHeaderTimeout() {
 	s.cfg.Gateway = config.GatewayConfig{
 		ResponseHeaderTimeout: 600,

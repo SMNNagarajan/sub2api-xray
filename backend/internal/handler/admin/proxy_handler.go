@@ -27,31 +27,37 @@ func NewProxyHandler(adminService service.AdminService) *ProxyHandler {
 
 // CreateProxyRequest represents create proxy request
 type CreateProxyRequest struct {
-	Name           string `json:"name" binding:"required"`
-	Protocol       string `json:"protocol" binding:"required,oneof=http https socks5 socks5h"`
-	Host           string `json:"host" binding:"required"`
-	Port           int    `json:"port" binding:"required,min=1,max=65535"`
-	Username       string `json:"username"`
-	Password       string `json:"password"`
-	ExpiresAt      *int64 `json:"expires_at"`
-	FallbackMode   string `json:"fallback_mode" binding:"omitempty,oneof=none proxy direct"`
-	BackupProxyID  *int64 `json:"backup_proxy_id"`
-	ExpiryWarnDays int    `json:"expiry_warn_days" binding:"omitempty,min=0"`
+	Name           string         `json:"name" binding:"required"`
+	IsPublic       bool           `json:"is_public"`
+	Kind           string         `json:"kind" binding:"omitempty,oneof=standard xray"`
+	Protocol       string         `json:"protocol" binding:"required"`
+	Host           string         `json:"host" binding:"required"`
+	Port           int            `json:"port" binding:"required,min=1,max=65535"`
+	Username       string         `json:"username"`
+	Password       string         `json:"password"`
+	ExpiresAt      *int64         `json:"expires_at"`
+	FallbackMode   string         `json:"fallback_mode" binding:"omitempty,oneof=none proxy direct"`
+	BackupProxyID  *int64         `json:"backup_proxy_id"`
+	ExpiryWarnDays int            `json:"expiry_warn_days" binding:"omitempty,min=0"`
+	Extra          map[string]any `json:"extra"`
 }
 
 // UpdateProxyRequest represents update proxy request
 type UpdateProxyRequest struct {
-	Name           string `json:"name"`
-	Protocol       string `json:"protocol" binding:"omitempty,oneof=http https socks5 socks5h"`
-	Host           string `json:"host"`
-	Port           int    `json:"port" binding:"omitempty,min=1,max=65535"`
-	Username       string `json:"username"`
-	Password       string `json:"password"`
-	Status         string `json:"status" binding:"omitempty,oneof=active inactive"`
-	ExpiresAt      *int64 `json:"expires_at"`
-	FallbackMode   string `json:"fallback_mode" binding:"omitempty,oneof=none proxy direct"`
-	BackupProxyID  *int64 `json:"backup_proxy_id"`
-	ExpiryWarnDays int    `json:"expiry_warn_days" binding:"omitempty,min=0"`
+	Name           string         `json:"name"`
+	IsPublic       *bool          `json:"is_public"`
+	Kind           string         `json:"kind" binding:"omitempty,oneof=standard xray"`
+	Protocol       string         `json:"protocol"`
+	Host           string         `json:"host"`
+	Port           int            `json:"port" binding:"omitempty,min=1,max=65535"`
+	Username       string         `json:"username"`
+	Password       string         `json:"password"`
+	Status         string         `json:"status" binding:"omitempty,oneof=active inactive"`
+	ExpiresAt      *int64         `json:"expires_at"`
+	FallbackMode   string         `json:"fallback_mode" binding:"omitempty,oneof=none proxy direct"`
+	BackupProxyID  *int64         `json:"backup_proxy_id"`
+	ExpiryWarnDays int            `json:"expiry_warn_days" binding:"omitempty,min=0"`
+	Extra          map[string]any `json:"extra"`
 }
 
 // List handles listing all proxies with pagination
@@ -63,13 +69,27 @@ func (h *ProxyHandler) List(c *gin.Context) {
 	search := c.Query("search")
 	sortBy := c.DefaultQuery("sort_by", "id")
 	sortOrder := c.DefaultQuery("sort_order", "desc")
+	ownerScope, err := service.NormalizeResourceOwnerScope(c.Query("owner_scope"))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
 	// 标准化和验证 search 参数
 	search = strings.TrimSpace(search)
 	if len(search) > 100 {
 		search = search[:100]
 	}
 
-	proxies, total, err := h.adminService.ListProxiesWithAccountCount(c.Request.Context(), page, pageSize, protocol, status, search, sortBy, sortOrder)
+	var proxies []service.ProxyWithAccountCount
+	var total int64
+	if ownerScope == "" {
+		proxies, total, err = h.adminService.ListProxiesWithAccountCount(c.Request.Context(), page, pageSize, protocol, status, search, sortBy, sortOrder)
+	} else if scoped, ok := h.adminService.(proxyOwnerScopeLister); ok {
+		proxies, total, err = scoped.ListProxiesWithAccountCountByOwnerScope(c.Request.Context(), page, pageSize, protocol, status, search, ownerScope, sortBy, sortOrder)
+	} else {
+		response.InternalError(c, "Resource owner filter is not available")
+		return
+	}
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -150,6 +170,8 @@ func (h *ProxyHandler) Create(c *gin.Context) {
 		}
 		proxy, err := h.adminService.CreateProxy(ctx, &service.CreateProxyInput{
 			Name:           strings.TrimSpace(req.Name),
+			IsPublic:       req.IsPublic,
+			Kind:           strings.TrimSpace(req.Kind),
 			Protocol:       strings.TrimSpace(req.Protocol),
 			Host:           strings.TrimSpace(req.Host),
 			Port:           req.Port,
@@ -159,6 +181,7 @@ func (h *ProxyHandler) Create(c *gin.Context) {
 			FallbackMode:   strings.TrimSpace(req.FallbackMode),
 			BackupProxyID:  req.BackupProxyID,
 			ExpiryWarnDays: req.ExpiryWarnDays,
+			Extra:          req.Extra,
 		})
 		if err != nil {
 			return nil, err
@@ -189,6 +212,8 @@ func (h *ProxyHandler) Update(c *gin.Context) {
 	}
 	proxy, err := h.adminService.UpdateProxy(c.Request.Context(), proxyID, &service.UpdateProxyInput{
 		Name:           strings.TrimSpace(req.Name),
+		IsPublic:       req.IsPublic,
+		Kind:           strings.TrimSpace(req.Kind),
 		Protocol:       strings.TrimSpace(req.Protocol),
 		Host:           strings.TrimSpace(req.Host),
 		Port:           req.Port,
@@ -199,6 +224,7 @@ func (h *ProxyHandler) Update(c *gin.Context) {
 		FallbackMode:   strings.TrimSpace(req.FallbackMode),
 		BackupProxyID:  req.BackupProxyID,
 		ExpiryWarnDays: req.ExpiryWarnDays,
+		Extra:          req.Extra,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -328,11 +354,13 @@ func (h *ProxyHandler) GetProxyAccounts(c *gin.Context) {
 
 // BatchCreateProxyItem represents a single proxy in batch create request
 type BatchCreateProxyItem struct {
-	Protocol string `json:"protocol" binding:"required,oneof=http https socks5 socks5h"`
-	Host     string `json:"host" binding:"required"`
-	Port     int    `json:"port" binding:"required,min=1,max=65535"`
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Kind     string         `json:"kind" binding:"omitempty,oneof=standard xray"`
+	Protocol string         `json:"protocol" binding:"required"`
+	Host     string         `json:"host" binding:"required"`
+	Port     int            `json:"port" binding:"required,min=1,max=65535"`
+	Username string         `json:"username"`
+	Password string         `json:"password"`
+	Extra    map[string]any `json:"extra"`
 }
 
 // BatchCreateRequest represents batch create proxies request
@@ -374,11 +402,13 @@ func (h *ProxyHandler) BatchCreate(c *gin.Context) {
 		// Create proxy with default name
 		_, err = h.adminService.CreateProxy(c.Request.Context(), &service.CreateProxyInput{
 			Name:     "default",
+			Kind:     strings.TrimSpace(item.Kind),
 			Protocol: protocol,
 			Host:     host,
 			Port:     item.Port,
 			Username: username,
 			Password: password,
+			Extra:    item.Extra,
 		})
 		if err != nil {
 			// If creation fails due to duplicate, count as skipped

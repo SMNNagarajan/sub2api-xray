@@ -11,6 +11,7 @@ ARG NODE_IMAGE=node:24-alpine
 ARG GOLANG_IMAGE=golang:1.26.5-alpine
 ARG ALPINE_IMAGE=alpine:3.21
 ARG POSTGRES_IMAGE=postgres:18-alpine
+ARG XRAY_IMAGE=ghcr.io/xtls/xray-core:26.3.27
 ARG GOPROXY=https://goproxy.cn,direct
 ARG GOSUMDB=sum.golang.google.cn
 ARG NPM_CONFIG_REGISTRY=
@@ -23,11 +24,11 @@ ARG NPM_CONFIG_REGISTRY
 
 WORKDIR /app/frontend
 
-# Install pnpm (pinned to v9 to match CI and keep builds reproducible)
-RUN corepack enable && corepack prepare pnpm@9 --activate
+# Keep the builder aligned with the lockfile generator.
+RUN corepack enable && corepack prepare pnpm@11.7.0 --activate
 
 # Install dependencies first (better caching)
-COPY frontend/package.json frontend/pnpm-lock.yaml ./
+COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./
 RUN --mount=type=cache,id=sub2api-pnpm-store,target=/root/.local/share/pnpm/store \
     if [ -n "${NPM_CONFIG_REGISTRY}" ]; then pnpm config set registry "${NPM_CONFIG_REGISTRY}"; fi && \
     pnpm install --frozen-lockfile --prefer-offline
@@ -89,7 +90,12 @@ RUN VERSION_VALUE="${VERSION}" && \
 FROM ${POSTGRES_IMAGE} AS pg-client
 
 # -----------------------------------------------------------------------------
-# Stage 4: Final Runtime Image
+# Stage 4: Xray Runtime
+# -----------------------------------------------------------------------------
+FROM ${XRAY_IMAGE} AS xray-runtime
+
+# -----------------------------------------------------------------------------
+# Stage 5: Final Runtime Image
 # -----------------------------------------------------------------------------
 FROM ${ALPINE_IMAGE}
 
@@ -116,6 +122,7 @@ RUN apk add --no-cache \
 COPY --from=pg-client /usr/local/bin/pg_dump /usr/local/bin/pg_dump
 COPY --from=pg-client /usr/local/bin/psql /usr/local/bin/psql
 COPY --from=pg-client /usr/local/lib/libpq.so.5* /usr/local/lib/
+COPY --from=xray-runtime /usr/local/bin/xray /usr/local/bin/xray
 
 # Create non-root user
 RUN addgroup -g 1000 sub2api && \
@@ -123,6 +130,11 @@ RUN addgroup -g 1000 sub2api && \
 
 # Set working directory
 WORKDIR /app
+
+ENV XRAY_BIN=/usr/local/bin/xray \
+    XRAY_WORK_DIR=/app/data/xray \
+    XRAY_MAX_INSTANCES=64 \
+    XRAY_MAX_INSTANCES_PER_USER=16
 
 # Copy binary/resources with ownership to avoid extra full-layer chown copy
 COPY --from=backend-builder --chown=sub2api:sub2api /app/sub2api /app/sub2api

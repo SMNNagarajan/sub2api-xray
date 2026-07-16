@@ -130,6 +130,21 @@ func AssignedBy(v int64) predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldEQ(FieldAssignedBy, v))
 }
 
+// ManagedByUserID applies equality check predicate on the "managed_by_user_id" field. It's identical to ManagedByUserIDEQ.
+func ManagedByUserID(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldManagedByUserID, v))
+}
+
+// SourceType applies equality check predicate on the "source_type" field. It's identical to SourceTypeEQ.
+func SourceType(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldSourceType, v))
+}
+
+// SourceRedeemCodeID applies equality check predicate on the "source_redeem_code_id" field. It's identical to SourceRedeemCodeIDEQ.
+func SourceRedeemCodeID(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldSourceRedeemCodeID, v))
+}
+
 // AssignedAt applies equality check predicate on the "assigned_at" field. It's identical to AssignedAtEQ.
 func AssignedAt(v time.Time) predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldEQ(FieldAssignedAt, v))
@@ -753,6 +768,171 @@ func AssignedByIsNil() predicate.UserSubscription {
 // AssignedByNotNil applies the NotNil predicate on the "assigned_by" field.
 func AssignedByNotNil() predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldNotNull(FieldAssignedBy))
+}
+
+// ManagedByUserIDEQ applies the EQ predicate on the "managed_by_user_id" field.
+func ManagedByUserIDEQ(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldManagedByUserID, v))
+}
+
+// ManagedByUserIDNEQ applies the NEQ predicate on the "managed_by_user_id" field.
+func ManagedByUserIDNEQ(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNEQ(FieldManagedByUserID, v))
+}
+
+// ManagedByUserIDIn applies the In predicate on the "managed_by_user_id" field.
+func ManagedByUserIDIn(vs ...int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIn(FieldManagedByUserID, vs...))
+}
+
+// ManagedByUserIDNotIn applies the NotIn predicate on the "managed_by_user_id" field.
+func ManagedByUserIDNotIn(vs ...int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotIn(FieldManagedByUserID, vs...))
+}
+
+// ManagedByUserIDGT applies the GT predicate on the "managed_by_user_id" field.
+func ManagedByUserIDGT(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGT(FieldManagedByUserID, v))
+}
+
+// ManagedByUserIDGTE applies the GTE predicate on the "managed_by_user_id" field.
+func ManagedByUserIDGTE(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGTE(FieldManagedByUserID, v))
+}
+
+// ManagedByUserIDLT applies the LT predicate on the "managed_by_user_id" field.
+func ManagedByUserIDLT(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLT(FieldManagedByUserID, v))
+}
+
+// ManagedByUserIDLTE applies the LTE predicate on the "managed_by_user_id" field.
+func ManagedByUserIDLTE(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLTE(FieldManagedByUserID, v))
+}
+
+// ManagedByUserIDIsNil applies the IsNil predicate on the "managed_by_user_id" field.
+func ManagedByUserIDIsNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIsNull(FieldManagedByUserID))
+}
+
+// ManagedByUserIDNotNil applies the NotNil predicate on the "managed_by_user_id" field.
+func ManagedByUserIDNotNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotNull(FieldManagedByUserID))
+}
+
+// SourceTypeEQ applies the EQ predicate on the "source_type" field.
+func SourceTypeEQ(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldSourceType, v))
+}
+
+// SourceTypeNEQ applies the NEQ predicate on the "source_type" field.
+func SourceTypeNEQ(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNEQ(FieldSourceType, v))
+}
+
+// SourceTypeIn applies the In predicate on the "source_type" field.
+func SourceTypeIn(vs ...string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIn(FieldSourceType, vs...))
+}
+
+// SourceTypeNotIn applies the NotIn predicate on the "source_type" field.
+func SourceTypeNotIn(vs ...string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotIn(FieldSourceType, vs...))
+}
+
+// SourceTypeGT applies the GT predicate on the "source_type" field.
+func SourceTypeGT(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGT(FieldSourceType, v))
+}
+
+// SourceTypeGTE applies the GTE predicate on the "source_type" field.
+func SourceTypeGTE(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGTE(FieldSourceType, v))
+}
+
+// SourceTypeLT applies the LT predicate on the "source_type" field.
+func SourceTypeLT(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLT(FieldSourceType, v))
+}
+
+// SourceTypeLTE applies the LTE predicate on the "source_type" field.
+func SourceTypeLTE(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLTE(FieldSourceType, v))
+}
+
+// SourceTypeContains applies the Contains predicate on the "source_type" field.
+func SourceTypeContains(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldContains(FieldSourceType, v))
+}
+
+// SourceTypeHasPrefix applies the HasPrefix predicate on the "source_type" field.
+func SourceTypeHasPrefix(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldHasPrefix(FieldSourceType, v))
+}
+
+// SourceTypeHasSuffix applies the HasSuffix predicate on the "source_type" field.
+func SourceTypeHasSuffix(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldHasSuffix(FieldSourceType, v))
+}
+
+// SourceTypeEqualFold applies the EqualFold predicate on the "source_type" field.
+func SourceTypeEqualFold(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEqualFold(FieldSourceType, v))
+}
+
+// SourceTypeContainsFold applies the ContainsFold predicate on the "source_type" field.
+func SourceTypeContainsFold(v string) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldContainsFold(FieldSourceType, v))
+}
+
+// SourceRedeemCodeIDEQ applies the EQ predicate on the "source_redeem_code_id" field.
+func SourceRedeemCodeIDEQ(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldSourceRedeemCodeID, v))
+}
+
+// SourceRedeemCodeIDNEQ applies the NEQ predicate on the "source_redeem_code_id" field.
+func SourceRedeemCodeIDNEQ(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNEQ(FieldSourceRedeemCodeID, v))
+}
+
+// SourceRedeemCodeIDIn applies the In predicate on the "source_redeem_code_id" field.
+func SourceRedeemCodeIDIn(vs ...int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIn(FieldSourceRedeemCodeID, vs...))
+}
+
+// SourceRedeemCodeIDNotIn applies the NotIn predicate on the "source_redeem_code_id" field.
+func SourceRedeemCodeIDNotIn(vs ...int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotIn(FieldSourceRedeemCodeID, vs...))
+}
+
+// SourceRedeemCodeIDGT applies the GT predicate on the "source_redeem_code_id" field.
+func SourceRedeemCodeIDGT(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGT(FieldSourceRedeemCodeID, v))
+}
+
+// SourceRedeemCodeIDGTE applies the GTE predicate on the "source_redeem_code_id" field.
+func SourceRedeemCodeIDGTE(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldGTE(FieldSourceRedeemCodeID, v))
+}
+
+// SourceRedeemCodeIDLT applies the LT predicate on the "source_redeem_code_id" field.
+func SourceRedeemCodeIDLT(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLT(FieldSourceRedeemCodeID, v))
+}
+
+// SourceRedeemCodeIDLTE applies the LTE predicate on the "source_redeem_code_id" field.
+func SourceRedeemCodeIDLTE(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldLTE(FieldSourceRedeemCodeID, v))
+}
+
+// SourceRedeemCodeIDIsNil applies the IsNil predicate on the "source_redeem_code_id" field.
+func SourceRedeemCodeIDIsNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIsNull(FieldSourceRedeemCodeID))
+}
+
+// SourceRedeemCodeIDNotNil applies the NotNil predicate on the "source_redeem_code_id" field.
+func SourceRedeemCodeIDNotNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotNull(FieldSourceRedeemCodeID))
 }
 
 // AssignedAtEQ applies the EQ predicate on the "assigned_at" field.

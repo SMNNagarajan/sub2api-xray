@@ -28,6 +28,32 @@ func (s *adminServiceImpl) ListAccounts(ctx context.Context, page, pageSize int,
 	return accounts, result.Total, nil
 }
 
+type accountOwnerScopeRepository interface {
+	ListWithOwnerScope(ctx context.Context, params pagination.PaginationParams, platform, accountType, status, search string, groupID int64, privacyMode, ownerScope string) ([]Account, *pagination.PaginationResult, error)
+	ListAllWithOwnerScope(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode, ownerScope string) ([]Account, error)
+}
+
+func (s *adminServiceImpl) ListAccountsByOwnerScope(ctx context.Context, page, pageSize int, platform, accountType, status, search string, groupID int64, privacyMode, ownerScope, sortBy, sortOrder string) ([]Account, int64, error) {
+	repo, ok := s.accountRepo.(accountOwnerScopeRepository)
+	if !ok {
+		return nil, 0, infraerrors.ServiceUnavailable("RESOURCE_OWNER_FILTER_UNAVAILABLE", "resource owner filter is not available")
+	}
+	params := pagination.PaginationParams{Page: page, PageSize: pageSize, SortBy: sortBy, SortOrder: sortOrder}
+	accounts, result, err := repo.ListWithOwnerScope(ctx, params, platform, accountType, status, search, groupID, privacyMode, ownerScope)
+	if err != nil {
+		return nil, 0, err
+	}
+	return accounts, result.Total, nil
+}
+
+func (s *adminServiceImpl) ListAccountsForSchedulerScoreFilterByOwnerScope(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode, ownerScope string) ([]Account, error) {
+	repo, ok := s.accountRepo.(accountOwnerScopeRepository)
+	if !ok {
+		return nil, infraerrors.ServiceUnavailable("RESOURCE_OWNER_FILTER_UNAVAILABLE", "resource owner filter is not available")
+	}
+	return repo.ListAllWithOwnerScope(ctx, platform, accountType, status, search, groupID, privacyMode, ownerScope)
+}
+
 func (s *adminServiceImpl) ListAccountsForSchedulerScoreFilter(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, error) {
 	if s == nil || s.accountRepo == nil {
 		return nil, nil
@@ -965,12 +991,26 @@ func (s *adminServiceImpl) DeleteAccount(ctx context.Context, id int64) error {
 }
 
 func (s *adminServiceImpl) RefreshAccountCredentials(ctx context.Context, id int64) (*Account, error) {
+	if id <= 0 {
+		return nil, infraerrors.BadRequest("ACCOUNT_ID_INVALID", "account_id is invalid")
+	}
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	// TODO: Implement refresh logic
-	return account, nil
+	if account == nil {
+		return nil, ErrAccountNotFound
+	}
+	if !account.IsOAuth() {
+		return nil, infraerrors.BadRequest("NOT_OAUTH", "cannot refresh non-OAuth account")
+	}
+	if account.IsCredentialShadow() {
+		return nil, infraerrors.BadRequest("SPARK_SHADOW_NO_REFRESH", "cannot refresh spark shadow account; its credentials are managed by the parent account")
+	}
+	if s.tokenRefreshService == nil {
+		return nil, infraerrors.ServiceUnavailable("TOKEN_REFRESH_UNAVAILABLE", "token refresh service is not available")
+	}
+	return s.tokenRefreshService.RefreshAccountNow(ctx, id)
 }
 
 func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Account, error) {

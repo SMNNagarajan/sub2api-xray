@@ -16,6 +16,7 @@ type GroupModelsListConfig = domain.GroupModelsListConfig
 type Group struct {
 	ID             int64
 	Name           string
+	OwnerUserID    *int64
 	Description    string
 	Platform       string
 	RateMultiplier float64

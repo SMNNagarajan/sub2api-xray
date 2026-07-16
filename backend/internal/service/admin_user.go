@@ -11,11 +11,18 @@ import (
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/account"
 	"github.com/Wei-Shaw/sub2api/ent/authidentity"
 	"github.com/Wei-Shaw/sub2api/ent/authidentitychannel"
+	"github.com/Wei-Shaw/sub2api/ent/group"
+	"github.com/Wei-Shaw/sub2api/ent/proxy"
+	"github.com/Wei-Shaw/sub2api/ent/proxysource"
+	"github.com/Wei-Shaw/sub2api/ent/redeemcode"
+	"github.com/Wei-Shaw/sub2api/ent/usersubscription"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
+	"github.com/lib/pq"
 )
 
 // User management implementations
@@ -266,8 +273,29 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 		user.AllowedGroups = *input.AllowedGroups
 	}
 
-	if err := s.userRepo.Update(ctx, user); err != nil {
+	var deprovisioned *userOwnedResourceDeprovision
+	if user.Status == StatusDisabled && oldStatus != StatusDisabled && s.entClient != nil {
+		tx, err := s.entClient.Tx(ctx)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = tx.Rollback() }()
+		opCtx := dbent.NewTxContext(ctx, tx)
+		deprovisioned, err = s.disableUserOwnedResources(opCtx, tx.Client(), user.ID)
+		if err != nil {
+			return nil, fmt.Errorf("disable user-owned resources: %w", err)
+		}
+		if err := s.userRepo.Update(opCtx, user); err != nil {
+			return nil, err
+		}
+		if err := tx.Commit(); err != nil {
+			return nil, err
+		}
+	} else if err := s.userRepo.Update(ctx, user); err != nil {
 		return nil, err
+	}
+	if deprovisioned != nil {
+		s.finalizeUserOwnedResourceDeprovision(ctx, user.ID, deprovisioned)
 	}
 
 	// 角色变更属权限敏感操作，落审计日志（含操作者），便于事后追溯。
@@ -349,7 +377,7 @@ func (s *adminServiceImpl) DeleteUser(ctx context.Context, id int64) error {
 	if err != nil {
 		return err
 	}
-
+	var deprovisioned *userOwnedResourceDeprovision
 	if s.entClient != nil {
 		tx, err := s.entClient.Tx(ctx)
 		if err != nil {
@@ -358,6 +386,10 @@ func (s *adminServiceImpl) DeleteUser(ctx context.Context, id int64) error {
 		defer func() { _ = tx.Rollback() }()
 
 		opCtx := dbent.NewTxContext(ctx, tx)
+		deprovisioned, err = s.disableUserOwnedResources(opCtx, tx.Client(), id)
+		if err != nil {
+			return fmt.Errorf("disable user-owned resources before deletion: %w", err)
+		}
 		if err := s.deleteUserWithAPIKeys(opCtx, id, apiKeys); err != nil {
 			return err
 		}
@@ -369,7 +401,9 @@ func (s *adminServiceImpl) DeleteUser(ctx context.Context, id int64) error {
 			return err
 		}
 	}
-
+	if deprovisioned != nil {
+		s.finalizeUserOwnedResourceDeprovision(ctx, id, deprovisioned)
+	}
 	if s.authCacheInvalidator != nil {
 		for _, key := range apiKeys {
 			if keyValue := strings.TrimSpace(key.Key); keyValue != "" {
@@ -379,6 +413,142 @@ func (s *adminServiceImpl) DeleteUser(ctx context.Context, id int64) error {
 		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, id)
 	}
 	return nil
+}
+
+type userOwnedResourceDeprovision struct {
+	groupIDs      []int64
+	accountIDs    []int64
+	proxyIDs      []int64
+	subscriptions []userOwnedSubscriptionRef
+}
+
+type userOwnedSubscriptionRef struct {
+	userID  int64
+	groupID int64
+}
+
+func (s *adminServiceImpl) disableUserOwnedResources(ctx context.Context, exec *dbent.Client, userID int64) (*userOwnedResourceDeprovision, error) {
+	if userID <= 0 || exec == nil {
+		return &userOwnedResourceDeprovision{}, nil
+	}
+	now := time.Now()
+
+	groupIDs, err := exec.Group.Query().Where(group.OwnerUserIDEQ(userID)).IDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list owned groups: %w", err)
+	}
+	accountIDs, err := exec.Account.Query().Where(account.OwnerUserIDEQ(userID)).IDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list owned accounts: %w", err)
+	}
+	proxyIDs, err := exec.Proxy.Query().Where(proxy.OwnerUserIDEQ(userID)).IDs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list owned proxies: %w", err)
+	}
+	subPred := usersubscription.Or(
+		usersubscription.ManagedByUserIDEQ(userID),
+		usersubscription.HasGroupWith(group.OwnerUserIDEQ(userID)),
+	)
+	subs, err := exec.UserSubscription.Query().Where(subPred).All(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list managed subscriptions: %w", err)
+	}
+
+	for _, groupID := range groupIDs {
+		if _, err := exec.Group.Update().
+			Where(group.IDEQ(groupID)).
+			SetStatus(StatusDisabled).
+			SetUpdatedAt(now).
+			Save(ctx); err != nil {
+			return nil, fmt.Errorf("disable owned group %d: %w", groupID, err)
+		}
+	}
+
+	for _, accountID := range accountIDs {
+		if _, err := exec.Account.Update().
+			Where(account.IDEQ(accountID)).
+			SetStatus(StatusDisabled).
+			SetSchedulable(false).
+			SetUpdatedAt(now).
+			Save(ctx); err != nil {
+			return nil, fmt.Errorf("disable owned account %d: %w", accountID, err)
+		}
+	}
+
+	if _, err := exec.Proxy.Update().
+		Where(proxy.OwnerUserIDEQ(userID)).
+		SetStatus(StatusDisabled).
+		SetUpdatedAt(now).
+		Save(ctx); err != nil {
+		return nil, fmt.Errorf("disable owned proxies: %w", err)
+	}
+	if _, err := exec.ProxySource.Update().
+		Where(proxysource.OwnerUserIDEQ(userID)).
+		SetDeletedAt(now).
+		SetUpdatedAt(now).
+		Save(ctx); err != nil {
+		return nil, fmt.Errorf("disable owned proxy sources: %w", err)
+	}
+	if _, err := exec.RedeemCode.Update().
+		Where(redeemcode.OwnerUserIDEQ(userID), redeemcode.StatusEQ(StatusUnused)).
+		SetStatus(StatusDisabled).
+		Save(ctx); err != nil {
+		return nil, fmt.Errorf("disable owned redeem codes: %w", err)
+	}
+	if _, err := exec.UserSubscription.Update().
+		Where(subPred).
+		SetDeletedAt(now).
+		SetUpdatedAt(now).
+		Save(ctx); err != nil {
+		return nil, fmt.Errorf("revoke managed subscriptions: %w", err)
+	}
+	result := &userOwnedResourceDeprovision{
+		groupIDs: groupIDs, accountIDs: accountIDs, proxyIDs: proxyIDs,
+		subscriptions: make([]userOwnedSubscriptionRef, 0, len(subs)),
+	}
+	for _, sub := range subs {
+		result.subscriptions = append(result.subscriptions, userOwnedSubscriptionRef{userID: sub.UserID, groupID: sub.GroupID})
+	}
+	return result, nil
+}
+
+func (s *adminServiceImpl) finalizeUserOwnedResourceDeprovision(ctx context.Context, userID int64, result *userOwnedResourceDeprovision) {
+	if result == nil {
+		return
+	}
+	for _, proxyID := range result.proxyIDs {
+		if err := DefaultXrayRuntimeManager().Stop(proxyID); err != nil {
+			logger.LegacyPrintf("service.admin", "stop disabled user-owned xray proxy failed: user_id=%d proxy_id=%d err=%v", userID, proxyID, err)
+		}
+	}
+	if s.db != nil && (len(result.accountIDs) > 0 || len(result.groupIDs) > 0) {
+		_, err := s.db.ExecContext(ctx, `
+INSERT INTO scheduler_outbox (event_type, account_id, group_id)
+SELECT $1, account_id, NULL FROM unnest($2::bigint[]) AS account_id
+UNION ALL
+SELECT $3, NULL, group_id FROM unnest($4::bigint[]) AS group_id`,
+			SchedulerOutboxEventAccountChanged, pq.Array(result.accountIDs),
+			SchedulerOutboxEventGroupChanged, pq.Array(result.groupIDs))
+		if err != nil {
+			logger.LegacyPrintf("service.admin", "enqueue disabled user-owned resources failed: user_id=%d err=%v", userID, err)
+		}
+	}
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, userID)
+		for _, groupID := range result.groupIDs {
+			s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, groupID)
+		}
+		for _, sub := range result.subscriptions {
+			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, sub.userID)
+		}
+	}
+	if s.billingCacheService != nil {
+		for _, sub := range result.subscriptions {
+			if err := s.billingCacheService.InvalidateSubscription(ctx, sub.userID, sub.groupID); err != nil {
+				logger.LegacyPrintf("service.admin", "invalidate disabled managed subscription failed: user_id=%d group_id=%d err=%v", sub.userID, sub.groupID, err)
+			}
+		}
+	}
 }
 
 func (s *adminServiceImpl) listUserAPIKeysForDeletion(ctx context.Context, userID int64) ([]APIKey, error) {

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"time"
 
@@ -432,6 +433,8 @@ type BulkUpdateAccountsResult struct {
 
 type CreateProxyInput struct {
 	Name           string
+	IsPublic       bool
+	Kind           string
 	Protocol       string
 	Host           string
 	Port           int
@@ -441,10 +444,13 @@ type CreateProxyInput struct {
 	FallbackMode   string
 	BackupProxyID  *int64
 	ExpiryWarnDays int
+	Extra          map[string]any
 }
 
 type UpdateProxyInput struct {
 	Name           string
+	IsPublic       *bool
+	Kind           string
 	Protocol       string
 	Host           string
 	Port           int
@@ -455,6 +461,7 @@ type UpdateProxyInput struct {
 	FallbackMode   string
 	BackupProxyID  *int64
 	ExpiryWarnDays int
+	Extra          map[string]any
 }
 
 type GenerateRedeemCodesInput struct {
@@ -593,12 +600,14 @@ type adminServiceImpl struct {
 	proxyProber          ProxyExitInfoProber
 	proxyLatencyCache    ProxyLatencyCache
 	authCacheInvalidator APIKeyAuthCacheInvalidator
+	db                   *sql.DB
 	entClient            *dbent.Client // 用于开启数据库事务
 	settingService       *SettingService
 	defaultSubAssigner   DefaultSubscriptionAssigner
 	userSubRepo          UserSubscriptionRepository
 	privacyClientFactory PrivacyClientFactory
 	runtimeBlocker       AccountRuntimeBlocker
+	tokenRefreshService  *TokenRefreshService
 }
 
 type userGroupRateBatchReader interface {
@@ -619,6 +628,7 @@ func NewAdminService(
 	proxyProber ProxyExitInfoProber,
 	proxyLatencyCache ProxyLatencyCache,
 	authCacheInvalidator APIKeyAuthCacheInvalidator,
+	db *sql.DB,
 	entClient *dbent.Client,
 	settingService *SettingService,
 	defaultSubAssigner DefaultSubscriptionAssigner,
@@ -640,6 +650,7 @@ func NewAdminService(
 		proxyProber:          proxyProber,
 		proxyLatencyCache:    proxyLatencyCache,
 		authCacheInvalidator: authCacheInvalidator,
+		db:                   db,
 		entClient:            entClient,
 		settingService:       settingService,
 		defaultSubAssigner:   defaultSubAssigner,
@@ -647,4 +658,11 @@ func NewAdminService(
 		privacyClientFactory: privacyClientFactory,
 		runtimeBlocker:       runtimeBlocker,
 	}
+}
+
+func (s *adminServiceImpl) SetTokenRefreshService(tokenRefreshService *TokenRefreshService) {
+	if s == nil {
+		return
+	}
+	s.tokenRefreshService = tokenRefreshService
 }

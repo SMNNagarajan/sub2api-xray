@@ -101,6 +101,7 @@ export default {
       columns: {
         name: '名称',
         id: '账号ID',
+        owner: '资源归属',
         platformType: '平台/类型',
         platform: '平台',
         type: '类型',
@@ -121,6 +122,11 @@ export default {
         expiresAt: '过期时间',
         actions: '操作'
       },
+      allResourceOwners: '全部资源归属',
+      systemResources: '系统资源',
+      userResources: '用户资源',
+      systemResource: '系统',
+      userResourceOwner: '用户 #{id}',
       schedulerScore: {
         baseShort: '普通',
         stickyShort: '粘性',
@@ -245,6 +251,7 @@ export default {
       status: {
         active: '正常',
         inactive: '停用',
+        disabled: '禁用',
         error: '错误',
         cooldown: '冷却中',
         paused: '暂停',

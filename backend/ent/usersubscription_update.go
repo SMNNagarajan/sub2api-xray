@@ -270,6 +270,74 @@ func (_u *UserSubscriptionUpdate) ClearAssignedBy() *UserSubscriptionUpdate {
 	return _u
 }
 
+// SetManagedByUserID sets the "managed_by_user_id" field.
+func (_u *UserSubscriptionUpdate) SetManagedByUserID(v int64) *UserSubscriptionUpdate {
+	_u.mutation.ResetManagedByUserID()
+	_u.mutation.SetManagedByUserID(v)
+	return _u
+}
+
+// SetNillableManagedByUserID sets the "managed_by_user_id" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableManagedByUserID(v *int64) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetManagedByUserID(*v)
+	}
+	return _u
+}
+
+// AddManagedByUserID adds value to the "managed_by_user_id" field.
+func (_u *UserSubscriptionUpdate) AddManagedByUserID(v int64) *UserSubscriptionUpdate {
+	_u.mutation.AddManagedByUserID(v)
+	return _u
+}
+
+// ClearManagedByUserID clears the value of the "managed_by_user_id" field.
+func (_u *UserSubscriptionUpdate) ClearManagedByUserID() *UserSubscriptionUpdate {
+	_u.mutation.ClearManagedByUserID()
+	return _u
+}
+
+// SetSourceType sets the "source_type" field.
+func (_u *UserSubscriptionUpdate) SetSourceType(v string) *UserSubscriptionUpdate {
+	_u.mutation.SetSourceType(v)
+	return _u
+}
+
+// SetNillableSourceType sets the "source_type" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableSourceType(v *string) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetSourceType(*v)
+	}
+	return _u
+}
+
+// SetSourceRedeemCodeID sets the "source_redeem_code_id" field.
+func (_u *UserSubscriptionUpdate) SetSourceRedeemCodeID(v int64) *UserSubscriptionUpdate {
+	_u.mutation.ResetSourceRedeemCodeID()
+	_u.mutation.SetSourceRedeemCodeID(v)
+	return _u
+}
+
+// SetNillableSourceRedeemCodeID sets the "source_redeem_code_id" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableSourceRedeemCodeID(v *int64) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetSourceRedeemCodeID(*v)
+	}
+	return _u
+}
+
+// AddSourceRedeemCodeID adds value to the "source_redeem_code_id" field.
+func (_u *UserSubscriptionUpdate) AddSourceRedeemCodeID(v int64) *UserSubscriptionUpdate {
+	_u.mutation.AddSourceRedeemCodeID(v)
+	return _u
+}
+
+// ClearSourceRedeemCodeID clears the value of the "source_redeem_code_id" field.
+func (_u *UserSubscriptionUpdate) ClearSourceRedeemCodeID() *UserSubscriptionUpdate {
+	_u.mutation.ClearSourceRedeemCodeID()
+	return _u
+}
+
 // SetAssignedAt sets the "assigned_at" field.
 func (_u *UserSubscriptionUpdate) SetAssignedAt(v time.Time) *UserSubscriptionUpdate {
 	_u.mutation.SetAssignedAt(v)
@@ -441,6 +509,11 @@ func (_u *UserSubscriptionUpdate) check() error {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.status": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.SourceType(); ok {
+		if err := usersubscription.SourceTypeValidator(v); err != nil {
+			return &ValidationError{Name: "source_type", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.source_type": %w`, err)}
+		}
+	}
 	if _u.mutation.UserCleared() && len(_u.mutation.UserIDs()) > 0 {
 		return errors.New(`ent: clearing a required unique edge "UserSubscription.user"`)
 	}
@@ -515,6 +588,27 @@ func (_u *UserSubscriptionUpdate) sqlSave(ctx context.Context) (_node int, err e
 	}
 	if value, ok := _u.mutation.AddedMonthlyUsageUsd(); ok {
 		_spec.AddField(usersubscription.FieldMonthlyUsageUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.ManagedByUserID(); ok {
+		_spec.SetField(usersubscription.FieldManagedByUserID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedManagedByUserID(); ok {
+		_spec.AddField(usersubscription.FieldManagedByUserID, field.TypeInt64, value)
+	}
+	if _u.mutation.ManagedByUserIDCleared() {
+		_spec.ClearField(usersubscription.FieldManagedByUserID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.SourceType(); ok {
+		_spec.SetField(usersubscription.FieldSourceType, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.SourceRedeemCodeID(); ok {
+		_spec.SetField(usersubscription.FieldSourceRedeemCodeID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedSourceRedeemCodeID(); ok {
+		_spec.AddField(usersubscription.FieldSourceRedeemCodeID, field.TypeInt64, value)
+	}
+	if _u.mutation.SourceRedeemCodeIDCleared() {
+		_spec.ClearField(usersubscription.FieldSourceRedeemCodeID, field.TypeInt64)
 	}
 	if value, ok := _u.mutation.AssignedAt(); ok {
 		_spec.SetField(usersubscription.FieldAssignedAt, field.TypeTime, value)
@@ -916,6 +1010,74 @@ func (_u *UserSubscriptionUpdateOne) ClearAssignedBy() *UserSubscriptionUpdateOn
 	return _u
 }
 
+// SetManagedByUserID sets the "managed_by_user_id" field.
+func (_u *UserSubscriptionUpdateOne) SetManagedByUserID(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetManagedByUserID()
+	_u.mutation.SetManagedByUserID(v)
+	return _u
+}
+
+// SetNillableManagedByUserID sets the "managed_by_user_id" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableManagedByUserID(v *int64) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetManagedByUserID(*v)
+	}
+	return _u
+}
+
+// AddManagedByUserID adds value to the "managed_by_user_id" field.
+func (_u *UserSubscriptionUpdateOne) AddManagedByUserID(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.AddManagedByUserID(v)
+	return _u
+}
+
+// ClearManagedByUserID clears the value of the "managed_by_user_id" field.
+func (_u *UserSubscriptionUpdateOne) ClearManagedByUserID() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearManagedByUserID()
+	return _u
+}
+
+// SetSourceType sets the "source_type" field.
+func (_u *UserSubscriptionUpdateOne) SetSourceType(v string) *UserSubscriptionUpdateOne {
+	_u.mutation.SetSourceType(v)
+	return _u
+}
+
+// SetNillableSourceType sets the "source_type" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableSourceType(v *string) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetSourceType(*v)
+	}
+	return _u
+}
+
+// SetSourceRedeemCodeID sets the "source_redeem_code_id" field.
+func (_u *UserSubscriptionUpdateOne) SetSourceRedeemCodeID(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.ResetSourceRedeemCodeID()
+	_u.mutation.SetSourceRedeemCodeID(v)
+	return _u
+}
+
+// SetNillableSourceRedeemCodeID sets the "source_redeem_code_id" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableSourceRedeemCodeID(v *int64) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetSourceRedeemCodeID(*v)
+	}
+	return _u
+}
+
+// AddSourceRedeemCodeID adds value to the "source_redeem_code_id" field.
+func (_u *UserSubscriptionUpdateOne) AddSourceRedeemCodeID(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.AddSourceRedeemCodeID(v)
+	return _u
+}
+
+// ClearSourceRedeemCodeID clears the value of the "source_redeem_code_id" field.
+func (_u *UserSubscriptionUpdateOne) ClearSourceRedeemCodeID() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearSourceRedeemCodeID()
+	return _u
+}
+
 // SetAssignedAt sets the "assigned_at" field.
 func (_u *UserSubscriptionUpdateOne) SetAssignedAt(v time.Time) *UserSubscriptionUpdateOne {
 	_u.mutation.SetAssignedAt(v)
@@ -1100,6 +1262,11 @@ func (_u *UserSubscriptionUpdateOne) check() error {
 			return &ValidationError{Name: "status", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.status": %w`, err)}
 		}
 	}
+	if v, ok := _u.mutation.SourceType(); ok {
+		if err := usersubscription.SourceTypeValidator(v); err != nil {
+			return &ValidationError{Name: "source_type", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.source_type": %w`, err)}
+		}
+	}
 	if _u.mutation.UserCleared() && len(_u.mutation.UserIDs()) > 0 {
 		return errors.New(`ent: clearing a required unique edge "UserSubscription.user"`)
 	}
@@ -1191,6 +1358,27 @@ func (_u *UserSubscriptionUpdateOne) sqlSave(ctx context.Context) (_node *UserSu
 	}
 	if value, ok := _u.mutation.AddedMonthlyUsageUsd(); ok {
 		_spec.AddField(usersubscription.FieldMonthlyUsageUsd, field.TypeFloat64, value)
+	}
+	if value, ok := _u.mutation.ManagedByUserID(); ok {
+		_spec.SetField(usersubscription.FieldManagedByUserID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedManagedByUserID(); ok {
+		_spec.AddField(usersubscription.FieldManagedByUserID, field.TypeInt64, value)
+	}
+	if _u.mutation.ManagedByUserIDCleared() {
+		_spec.ClearField(usersubscription.FieldManagedByUserID, field.TypeInt64)
+	}
+	if value, ok := _u.mutation.SourceType(); ok {
+		_spec.SetField(usersubscription.FieldSourceType, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.SourceRedeemCodeID(); ok {
+		_spec.SetField(usersubscription.FieldSourceRedeemCodeID, field.TypeInt64, value)
+	}
+	if value, ok := _u.mutation.AddedSourceRedeemCodeID(); ok {
+		_spec.AddField(usersubscription.FieldSourceRedeemCodeID, field.TypeInt64, value)
+	}
+	if _u.mutation.SourceRedeemCodeIDCleared() {
+		_spec.ClearField(usersubscription.FieldSourceRedeemCodeID, field.TypeInt64)
 	}
 	if value, ok := _u.mutation.AssignedAt(); ok {
 		_spec.SetField(usersubscription.FieldAssignedAt, field.TypeTime, value)

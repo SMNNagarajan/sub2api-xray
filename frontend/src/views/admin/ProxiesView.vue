@@ -35,6 +35,14 @@
               @change="loadProxies"
             />
           </div>
+          <div class="w-full sm:w-40">
+            <Select
+              v-model="filters.owner_scope"
+              :options="ownerScopeOptions"
+              :placeholder="t('admin.proxies.allResourceOwners')"
+              @change="loadProxies"
+            />
+          </div>
 
           <!-- Right: All action buttons -->
           <div class="flex flex-1 flex-wrap items-center justify-end gap-2">
@@ -122,6 +130,27 @@
             <span class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
           </template>
 
+          <template #cell-owner_user_id="{ row }">
+            <span v-if="row.owner_user_id" class="font-mono text-xs text-primary-600 dark:text-primary-400">
+              {{ t('admin.proxies.userResourceOwner', { id: row.owner_user_id }) }}
+            </span>
+            <span v-else class="text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.proxies.systemResource') }}
+            </span>
+          </template>
+
+          <template #cell-visibility="{ row }">
+            <span :class="['badge', row.is_public ? 'badge-success' : 'badge-gray']">
+              {{ row.is_public ? t('admin.proxies.publicResource') : t('admin.proxies.privateResource') }}
+            </span>
+          </template>
+
+          <template #cell-kind="{ value }">
+            <span :class="['badge', value === 'xray' ? 'badge-primary' : 'badge-gray']">
+              {{ value === 'xray' ? 'Xray' : t('admin.proxies.standardProxy') }}
+            </span>
+          </template>
+
           <template #cell-protocol="{ value }">
             <span
               v-if="value"
@@ -166,15 +195,18 @@
           <template #cell-auth="{ row }">
             <div v-if="row.username || row.password" class="flex items-center gap-1.5">
               <div class="flex flex-col text-xs">
-                <span v-if="row.username" class="text-gray-700 dark:text-gray-200">{{ row.username }}</span>
+                <span v-if="row.username" class="font-mono text-gray-700 dark:text-gray-200">
+                  {{ visiblePasswordIds.has(row.id) ? row.username : '••••••' }}
+                </span>
                 <span v-if="row.password" class="font-mono text-gray-500 dark:text-gray-400">
                   {{ visiblePasswordIds.has(row.id) ? row.password : '••••••' }}
                 </span>
               </div>
               <button
-                v-if="row.password"
+                v-if="row.username || row.password"
                 type="button"
                 class="ml-1 rounded p-0.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                :title="visiblePasswordIds.has(row.id) ? t('admin.proxies.hideCredentials') : t('admin.proxies.showCredentials')"
                 @click.stop="visiblePasswordIds.has(row.id) ? visiblePasswordIds.delete(row.id) : visiblePasswordIds.add(row.id)"
               >
                 <Icon :name="visiblePasswordIds.has(row.id) ? 'eyeOff' : 'eye'" size="sm" />
@@ -438,8 +470,12 @@
           />
         </div>
         <div>
+          <label class="input-label">{{ t('admin.proxies.kind') }}</label>
+          <Select v-model="createForm.kind" :options="proxyKindOptions" :searchable="false" @change="normalizeCreateProtocol" />
+        </div>
+        <div>
           <label class="input-label">{{ t('admin.proxies.protocol') }}</label>
-          <Select v-model="createForm.protocol" :options="protocolSelectOptions" />
+          <Select v-model="createForm.protocol" :options="createProtocolSelectOptions" :searchable="false" />
         </div>
         <div class="grid grid-cols-2 gap-4">
           <div>
@@ -492,6 +528,15 @@
             </button>
           </div>
         </div>
+        <div v-if="createForm.kind === 'xray'">
+          <label class="input-label">{{ t('admin.proxies.xrayNodeUri') }}</label>
+          <textarea v-model.trim="createForm.xray_raw" rows="4" class="input break-all font-mono text-xs" :placeholder="t('admin.proxies.xrayNodeUriPlaceholder')"></textarea>
+          <p class="input-hint mt-1">{{ t('admin.proxies.xrayNodeUriHint') }}</p>
+        </div>
+        <label class="flex items-center gap-2">
+          <input v-model="createForm.is_public" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+          <span class="text-sm text-gray-700 dark:text-gray-200">{{ t('admin.proxies.publicToUsers') }}</span>
+        </label>
         <div>
           <label class="input-label">{{ t('admin.proxies.expiresAt') }}</label>
           <div class="mb-2 flex flex-wrap gap-2">
@@ -678,8 +723,12 @@
           <input v-model="editForm.name" type="text" required class="input" />
         </div>
         <div>
+          <label class="input-label">{{ t('admin.proxies.kind') }}</label>
+          <Select v-model="editForm.kind" :options="proxyKindOptions" :searchable="false" @change="normalizeEditProtocol" />
+        </div>
+        <div>
           <label class="input-label">{{ t('admin.proxies.protocol') }}</label>
-          <Select v-model="editForm.protocol" :options="protocolSelectOptions" />
+          <Select v-model="editForm.protocol" :options="editProtocolSelectOptions" :searchable="false" />
         </div>
         <div class="grid grid-cols-2 gap-4">
           <div>
@@ -721,10 +770,24 @@
             </button>
           </div>
         </div>
+        <div v-if="editForm.kind === 'xray'">
+          <label class="input-label">{{ t('admin.proxies.xrayNodeUri') }}</label>
+          <textarea v-model.trim="editForm.xray_raw" rows="4" class="input break-all font-mono text-xs" :placeholder="t('admin.proxies.xrayNodeUriPlaceholder')"></textarea>
+          <p class="input-hint mt-1">{{ t('admin.proxies.xrayNodeUriHint') }}</p>
+        </div>
         <div>
           <label class="input-label">{{ t('admin.proxies.status') }}</label>
           <Select v-model="editForm.status" :options="editStatusOptions" />
         </div>
+        <label class="flex items-center gap-2">
+          <input
+            v-model="editForm.is_public"
+            type="checkbox"
+            :disabled="editingProxy.owner_user_id != null"
+            class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed disabled:opacity-50"
+          />
+          <span class="text-sm text-gray-700 dark:text-gray-200">{{ t('admin.proxies.publicToUsers') }}</span>
+        </label>
         <div>
           <label class="input-label">{{ t('admin.proxies.expiresAt') }}</label>
           <div class="mb-2 flex flex-wrap gap-2">
@@ -968,7 +1031,7 @@ import { ref, reactive, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
-import type { Proxy, ProxyAccountSummary, ProxyProtocol, ProxyQualityCheckResult } from '@/types'
+import type { Proxy, ProxyAccountSummary, ProxyKind, ProxyProtocol, ProxyQualityCheckResult } from '@/types'
 import type { Column } from '@/components/common/types'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
@@ -996,6 +1059,9 @@ const { copyToClipboard } = useClipboard()
 const columns = computed<Column[]>(() => [
   { key: 'select', label: '', sortable: false },
   { key: 'name', label: t('admin.proxies.columns.name'), sortable: true },
+  { key: 'owner_user_id', label: t('admin.proxies.columns.owner'), sortable: false },
+  { key: 'visibility', label: t('admin.proxies.columns.visibility'), sortable: false },
+  { key: 'kind', label: t('admin.proxies.columns.kind'), sortable: false },
   { key: 'protocol', label: t('admin.proxies.columns.protocol'), sortable: true },
   { key: 'address', label: t('admin.proxies.columns.address'), sortable: false },
   { key: 'auth', label: t('admin.proxies.columns.auth'), sortable: false },
@@ -1014,7 +1080,11 @@ const protocolOptions = computed(() => [
   { value: 'http', label: 'HTTP' },
   { value: 'https', label: 'HTTPS' },
   { value: 'socks5', label: 'SOCKS5' },
-  { value: 'socks5h', label: 'SOCKS5H' }
+  { value: 'socks5h', label: 'SOCKS5H' },
+  { value: 'vmess', label: 'VMess' },
+  { value: 'vless', label: 'VLESS' },
+  { value: 'trojan', label: 'Trojan' },
+  { value: 'ss', label: 'Shadowsocks' }
 ])
 
 const statusOptions = computed(() => [
@@ -1024,12 +1094,28 @@ const statusOptions = computed(() => [
   { value: 'expired', label: t('admin.proxies.expired') }
 ])
 
+const ownerScopeOptions = computed(() => [
+  { value: '', label: t('admin.proxies.allResourceOwners') },
+  { value: 'system', label: t('admin.proxies.systemResources') },
+  { value: 'user', label: t('admin.proxies.userResources') }
+])
+
 // Form options
-const protocolSelectOptions = computed(() => [
+const standardProtocolSelectOptions = computed(() => [
   { value: 'http', label: t('admin.proxies.protocols.http') },
   { value: 'https', label: t('admin.proxies.protocols.https') },
   { value: 'socks5', label: t('admin.proxies.protocols.socks5') },
   { value: 'socks5h', label: t('admin.proxies.protocols.socks5h') }
+])
+const xrayProtocolSelectOptions = computed(() => [
+  { value: 'vmess', label: 'VMess' },
+  { value: 'vless', label: 'VLESS' },
+  { value: 'trojan', label: 'Trojan' },
+  { value: 'ss', label: 'Shadowsocks' },
+])
+const proxyKindOptions = computed(() => [
+  { value: 'standard', label: t('admin.proxies.standardProxy') },
+  { value: 'xray', label: 'Xray' },
 ])
 
 const editStatusOptions = computed(() => [
@@ -1044,7 +1130,8 @@ const loading = ref(false)
 const searchQuery = ref('')
 const filters = reactive({
   protocol: '',
-  status: ''
+  status: '',
+  owner_scope: ''
 })
 const pagination = reactive({
   page: 1,
@@ -1123,6 +1210,8 @@ const batchParseResult = reactive({
 
 const createForm = reactive({
   name: '',
+  is_public: false,
+  kind: 'standard' as ProxyKind,
   protocol: 'http' as ProxyProtocol,
   host: '',
   port: 8080,
@@ -1132,21 +1221,38 @@ const createForm = reactive({
   fallback_mode: 'none' as 'none' | 'proxy' | 'direct',
   backup_proxy_id: null as number | null,
   expiry_warn_days: 7 as number,
+  xray_raw: '',
 })
 
 const editForm = reactive({
   name: '',
+  is_public: false,
+  kind: 'standard' as ProxyKind,
   protocol: 'http' as ProxyProtocol,
   host: '',
   port: 8080,
   username: '',
   password: '',
-  status: 'active' as 'active' | 'inactive' | 'expired',
+  status: 'active' as 'active' | 'inactive' | 'disabled' | 'expired',
   expires_at: '' as string,
   fallback_mode: 'none' as 'none' | 'proxy' | 'direct',
   backup_proxy_id: null as number | null,
   expiry_warn_days: 7 as number,
+  xray_raw: '',
 })
+
+const createProtocolSelectOptions = computed(() => createForm.kind === 'xray' ? xrayProtocolSelectOptions.value : standardProtocolSelectOptions.value)
+const editProtocolSelectOptions = computed(() => editForm.kind === 'xray' ? xrayProtocolSelectOptions.value : standardProtocolSelectOptions.value)
+const normalizeCreateProtocol = () => {
+  if (!createProtocolSelectOptions.value.some(option => option.value === createForm.protocol)) {
+    createForm.protocol = createProtocolSelectOptions.value[0].value as ProxyProtocol
+  }
+}
+const normalizeEditProtocol = () => {
+  if (!editProtocolSelectOptions.value.some(option => option.value === editForm.protocol)) {
+    editForm.protocol = editProtocolSelectOptions.value[0].value as ProxyProtocol
+  }
+}
 
 const allProxiesForBackup = ref<Proxy[]>([])
 const loadBackupProxyOptions = async () => {
@@ -1182,6 +1288,7 @@ const toggleSelectAllVisible = (event: Event) => {
 const buildProxyQueryFilters = () => ({
   protocol: filters.protocol || undefined,
   status: (filters.status || undefined) as 'active' | 'inactive' | 'expired' | undefined,
+  owner_scope: (filters.owner_scope || undefined) as 'system' | 'user' | undefined,
   search: searchQuery.value || undefined,
   sort_by: sortState.sort_by,
   sort_order: sortState.sort_order
@@ -1252,6 +1359,8 @@ const closeCreateModal = () => {
   showCreateModal.value = false
   createMode.value = 'standard'
   createForm.name = ''
+  createForm.is_public = false
+  createForm.kind = 'standard'
   createForm.protocol = 'http'
   createForm.host = ''
   createForm.port = 8080
@@ -1261,6 +1370,7 @@ const closeCreateModal = () => {
   createForm.fallback_mode = 'none'
   createForm.backup_proxy_id = null
   createForm.expiry_warn_days = 7
+  createForm.xray_raw = ''
   createPasswordVisible.value = false
   batchInput.value = ''
   batchParseResult.total = 0
@@ -1377,10 +1487,16 @@ const handleCreateProxy = async () => {
     appStore.showError(t('admin.proxies.portInvalid'))
     return
   }
+  if (createForm.kind === 'xray' && !createForm.xray_raw.trim()) {
+    appStore.showError(t('admin.proxies.xrayNodeUriRequired'))
+    return
+  }
   submitting.value = true
   try {
     await adminAPI.proxies.create({
       name: createForm.name.trim(),
+      is_public: createForm.is_public,
+      kind: createForm.kind,
       protocol: createForm.protocol,
       host: createForm.host.trim(),
       port: createForm.port,
@@ -1390,6 +1506,7 @@ const handleCreateProxy = async () => {
       fallback_mode: createForm.fallback_mode,
       backup_proxy_id: createForm.fallback_mode === 'proxy' ? createForm.backup_proxy_id : null,
       expiry_warn_days: createForm.expiry_warn_days,
+      extra: createForm.kind === 'xray' ? { raw: createForm.xray_raw.trim() } : {},
     })
     appStore.showSuccess(t('admin.proxies.proxyCreated'))
     closeCreateModal()
@@ -1405,6 +1522,8 @@ const handleCreateProxy = async () => {
 const handleEdit = (proxy: Proxy) => {
   editingProxy.value = proxy
   editForm.name = proxy.name
+  editForm.is_public = Boolean(proxy.is_public)
+  editForm.kind = proxy.kind || 'standard'
   editForm.protocol = proxy.protocol
   editForm.host = proxy.host
   editForm.port = proxy.port
@@ -1415,6 +1534,7 @@ const handleEdit = (proxy: Proxy) => {
   editForm.fallback_mode = proxy.fallback_mode || 'none'
   editForm.backup_proxy_id = proxy.backup_proxy_id ?? null
   editForm.expiry_warn_days = proxy.expiry_warn_days ?? 7
+  editForm.xray_raw = typeof proxy.extra?.raw === 'string' ? proxy.extra.raw : ''
   editPasswordVisible.value = false
   editPasswordDirty.value = false
   showEditModal.value = true
@@ -1441,11 +1561,17 @@ const handleUpdateProxy = async () => {
     appStore.showError(t('admin.proxies.portInvalid'))
     return
   }
+  if (editForm.kind === 'xray' && !editForm.xray_raw.trim()) {
+    appStore.showError(t('admin.proxies.xrayNodeUriRequired'))
+    return
+  }
 
   submitting.value = true
   try {
     const updateData: any = {
       name: editForm.name.trim(),
+      is_public: editForm.is_public,
+      kind: editForm.kind,
       protocol: editForm.protocol,
       host: editForm.host.trim(),
       port: editForm.port,
@@ -1455,6 +1581,9 @@ const handleUpdateProxy = async () => {
       fallback_mode: editForm.fallback_mode,
       backup_proxy_id: editForm.fallback_mode === 'proxy' ? editForm.backup_proxy_id : null,
       expiry_warn_days: editForm.expiry_warn_days,
+      extra: editForm.kind === 'xray'
+        ? { ...(editingProxy.value.extra || {}), raw: editForm.xray_raw.trim() }
+        : { ...(editingProxy.value.extra || {}) },
     }
 
     // Only include password if user actually modified the field
@@ -2018,10 +2147,17 @@ function buildAuthPart(row: any): string {
 }
 
 function buildProxyUrl(row: any): string {
+  if (row.kind === 'xray' && typeof row.extra?.raw === 'string' && row.extra.raw.trim()) {
+    return row.extra.raw.trim()
+  }
   return `${row.protocol}://${buildAuthPart(row)}${row.host}:${row.port}`
 }
 
 function getCopyFormats(row: any) {
+  if (row.kind === 'xray') {
+    const nodeURI = buildProxyUrl(row)
+    return [{ label: nodeURI, value: nodeURI }]
+  }
   const hasAuth = row.username || row.password
   const fullUrl = buildProxyUrl(row)
   const formats = [

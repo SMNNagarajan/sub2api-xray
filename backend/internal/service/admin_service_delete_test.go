@@ -8,6 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
+	"github.com/DATA-DOG/go-sqlmock"
+	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
@@ -25,6 +29,44 @@ type userRepoStub struct {
 	deletedIDs    []int64
 	usersByEmail  map[string]*User
 	getByEmailErr error
+}
+
+func newFailingDeprovisionClient(t *testing.T, injected error) (*dbent.Client, sqlmock.Sqlmock) {
+	t.Helper()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	driver := entsql.OpenDB(dialect.Postgres, db)
+	client := dbent.NewClient(dbent.Driver(driver))
+	t.Cleanup(func() { _ = client.Close() })
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT.*FROM "groups"`).WillReturnError(injected)
+	mock.ExpectRollback()
+	return client, mock
+}
+
+func TestUpdateUserDoesNotDisableUserWhenOwnedResourceDeprovisionFails(t *testing.T) {
+	injected := errors.New("owned resource query failed")
+	client, mock := newFailingDeprovisionClient(t, injected)
+	repo := &userRepoStub{user: &User{ID: 42, Email: "user@example.com", Role: RoleUser, Status: StatusActive}}
+	admin := &adminServiceImpl{userRepo: repo, entClient: client}
+
+	_, err := admin.UpdateUser(context.Background(), 42, &UpdateUserInput{Status: StatusDisabled})
+	require.ErrorIs(t, err, injected)
+	require.Empty(t, repo.updated, "user status must not be persisted after deprovision failure")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestDeleteUserDoesNotDeleteUserWhenOwnedResourceDeprovisionFails(t *testing.T) {
+	injected := errors.New("owned resource query failed")
+	client, mock := newFailingDeprovisionClient(t, injected)
+	repo := &userRepoStub{user: &User{ID: 42, Email: "user@example.com", Role: RoleUser, Status: StatusActive}}
+	admin := &adminServiceImpl{userRepo: repo, entClient: client}
+
+	err := admin.DeleteUser(context.Background(), 42)
+	require.ErrorIs(t, err, injected)
+	require.Empty(t, repo.deletedIDs, "user must not be deleted after deprovision failure")
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func (s *userRepoStub) Create(ctx context.Context, user *User) error {
@@ -264,10 +306,13 @@ func (s *deleteGroupAPIKeyRepoStub) ListKeysByGroupID(ctx context.Context, group
 }
 
 type proxyRepoStub struct {
-	deleteErr    error
-	countErr     error
-	accountCount int64
-	deletedIDs   []int64
+	proxy                 *Proxy
+	deleteErr             error
+	countErr              error
+	accountCount          int64
+	userOwnedAccountCount int64
+	deletedIDs            []int64
+	updated               bool
 }
 
 func (s *proxyRepoStub) Create(ctx context.Context, proxy *Proxy) error {
@@ -275,7 +320,10 @@ func (s *proxyRepoStub) Create(ctx context.Context, proxy *Proxy) error {
 }
 
 func (s *proxyRepoStub) GetByID(ctx context.Context, id int64) (*Proxy, error) {
-	panic("unexpected GetByID call")
+	if s.proxy == nil {
+		panic("unexpected GetByID call")
+	}
+	return s.proxy, nil
 }
 
 func (s *proxyRepoStub) ListByIDs(ctx context.Context, ids []int64) ([]Proxy, error) {
@@ -283,7 +331,9 @@ func (s *proxyRepoStub) ListByIDs(ctx context.Context, ids []int64) ([]Proxy, er
 }
 
 func (s *proxyRepoStub) Update(ctx context.Context, proxy *Proxy) error {
-	panic("unexpected Update call")
+	s.updated = true
+	s.proxy = proxy
+	return nil
 }
 
 func (s *proxyRepoStub) Delete(ctx context.Context, id int64) error {
@@ -320,6 +370,10 @@ func (s *proxyRepoStub) CountAccountsByProxyID(ctx context.Context, proxyID int6
 		return 0, s.countErr
 	}
 	return s.accountCount, nil
+}
+
+func (s *proxyRepoStub) CountUserOwnedAccountsByProxyID(ctx context.Context, proxyID int64) (int64, error) {
+	return s.userOwnedAccountCount, nil
 }
 
 func (s *proxyRepoStub) ListAccountSummariesByProxyID(ctx context.Context, proxyID int64) ([]ProxyAccountSummary, error) {
@@ -671,6 +725,20 @@ func TestAdminService_DeleteProxy_Error(t *testing.T) {
 
 	err := svc.DeleteProxy(context.Background(), 33)
 	require.ErrorIs(t, err, deleteErr)
+}
+
+func TestAdminService_UpdateProxyRejectsRevokingPublicProxyInUseByUsers(t *testing.T) {
+	public := false
+	repo := &proxyRepoStub{
+		proxy:                 &Proxy{ID: 33, Name: "public", IsPublic: true, Status: StatusActive},
+		userOwnedAccountCount: 1,
+	}
+	svc := &adminServiceImpl{proxyRepo: repo}
+
+	_, err := svc.UpdateProxy(context.Background(), 33, &UpdateProxyInput{IsPublic: &public})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "still used by user-owned accounts")
+	require.False(t, repo.updated)
 }
 
 func TestAdminService_DeleteRedeemCode_Success(t *testing.T) {

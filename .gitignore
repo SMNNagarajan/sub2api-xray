@@ -142,3 +142,7 @@ docs/*
 frontend/coverage/
 aicodex
 output/
+
+# Local review/deployment artifacts (may contain environment-specific data)
+/artifacts/
+/deploy/docker-compose.review.yml

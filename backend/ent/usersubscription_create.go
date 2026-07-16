@@ -203,6 +203,48 @@ func (_c *UserSubscriptionCreate) SetNillableAssignedBy(v *int64) *UserSubscript
 	return _c
 }
 
+// SetManagedByUserID sets the "managed_by_user_id" field.
+func (_c *UserSubscriptionCreate) SetManagedByUserID(v int64) *UserSubscriptionCreate {
+	_c.mutation.SetManagedByUserID(v)
+	return _c
+}
+
+// SetNillableManagedByUserID sets the "managed_by_user_id" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillableManagedByUserID(v *int64) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetManagedByUserID(*v)
+	}
+	return _c
+}
+
+// SetSourceType sets the "source_type" field.
+func (_c *UserSubscriptionCreate) SetSourceType(v string) *UserSubscriptionCreate {
+	_c.mutation.SetSourceType(v)
+	return _c
+}
+
+// SetNillableSourceType sets the "source_type" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillableSourceType(v *string) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetSourceType(*v)
+	}
+	return _c
+}
+
+// SetSourceRedeemCodeID sets the "source_redeem_code_id" field.
+func (_c *UserSubscriptionCreate) SetSourceRedeemCodeID(v int64) *UserSubscriptionCreate {
+	_c.mutation.SetSourceRedeemCodeID(v)
+	return _c
+}
+
+// SetNillableSourceRedeemCodeID sets the "source_redeem_code_id" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillableSourceRedeemCodeID(v *int64) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetSourceRedeemCodeID(*v)
+	}
+	return _c
+}
+
 // SetAssignedAt sets the "assigned_at" field.
 func (_c *UserSubscriptionCreate) SetAssignedAt(v time.Time) *UserSubscriptionCreate {
 	_c.mutation.SetAssignedAt(v)
@@ -342,6 +384,10 @@ func (_c *UserSubscriptionCreate) defaults() error {
 		v := usersubscription.DefaultMonthlyUsageUsd
 		_c.mutation.SetMonthlyUsageUsd(v)
 	}
+	if _, ok := _c.mutation.SourceType(); !ok {
+		v := usersubscription.DefaultSourceType
+		_c.mutation.SetSourceType(v)
+	}
 	if _, ok := _c.mutation.AssignedAt(); !ok {
 		if usersubscription.DefaultAssignedAt == nil {
 			return fmt.Errorf("ent: uninitialized usersubscription.DefaultAssignedAt (forgotten import ent/runtime?)")
@@ -388,6 +434,14 @@ func (_c *UserSubscriptionCreate) check() error {
 	}
 	if _, ok := _c.mutation.MonthlyUsageUsd(); !ok {
 		return &ValidationError{Name: "monthly_usage_usd", err: errors.New(`ent: missing required field "UserSubscription.monthly_usage_usd"`)}
+	}
+	if _, ok := _c.mutation.SourceType(); !ok {
+		return &ValidationError{Name: "source_type", err: errors.New(`ent: missing required field "UserSubscription.source_type"`)}
+	}
+	if v, ok := _c.mutation.SourceType(); ok {
+		if err := usersubscription.SourceTypeValidator(v); err != nil {
+			return &ValidationError{Name: "source_type", err: fmt.Errorf(`ent: validator failed for field "UserSubscription.source_type": %w`, err)}
+		}
 	}
 	if _, ok := _c.mutation.AssignedAt(); !ok {
 		return &ValidationError{Name: "assigned_at", err: errors.New(`ent: missing required field "UserSubscription.assigned_at"`)}
@@ -472,6 +526,18 @@ func (_c *UserSubscriptionCreate) createSpec() (*UserSubscription, *sqlgraph.Cre
 	if value, ok := _c.mutation.MonthlyUsageUsd(); ok {
 		_spec.SetField(usersubscription.FieldMonthlyUsageUsd, field.TypeFloat64, value)
 		_node.MonthlyUsageUsd = value
+	}
+	if value, ok := _c.mutation.ManagedByUserID(); ok {
+		_spec.SetField(usersubscription.FieldManagedByUserID, field.TypeInt64, value)
+		_node.ManagedByUserID = &value
+	}
+	if value, ok := _c.mutation.SourceType(); ok {
+		_spec.SetField(usersubscription.FieldSourceType, field.TypeString, value)
+		_node.SourceType = value
+	}
+	if value, ok := _c.mutation.SourceRedeemCodeID(); ok {
+		_spec.SetField(usersubscription.FieldSourceRedeemCodeID, field.TypeInt64, value)
+		_node.SourceRedeemCodeID = &value
 	}
 	if value, ok := _c.mutation.AssignedAt(); ok {
 		_spec.SetField(usersubscription.FieldAssignedAt, field.TypeTime, value)
@@ -816,6 +882,66 @@ func (u *UserSubscriptionUpsert) ClearAssignedBy() *UserSubscriptionUpsert {
 	return u
 }
 
+// SetManagedByUserID sets the "managed_by_user_id" field.
+func (u *UserSubscriptionUpsert) SetManagedByUserID(v int64) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldManagedByUserID, v)
+	return u
+}
+
+// UpdateManagedByUserID sets the "managed_by_user_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateManagedByUserID() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldManagedByUserID)
+	return u
+}
+
+// AddManagedByUserID adds v to the "managed_by_user_id" field.
+func (u *UserSubscriptionUpsert) AddManagedByUserID(v int64) *UserSubscriptionUpsert {
+	u.Add(usersubscription.FieldManagedByUserID, v)
+	return u
+}
+
+// ClearManagedByUserID clears the value of the "managed_by_user_id" field.
+func (u *UserSubscriptionUpsert) ClearManagedByUserID() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldManagedByUserID)
+	return u
+}
+
+// SetSourceType sets the "source_type" field.
+func (u *UserSubscriptionUpsert) SetSourceType(v string) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldSourceType, v)
+	return u
+}
+
+// UpdateSourceType sets the "source_type" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateSourceType() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldSourceType)
+	return u
+}
+
+// SetSourceRedeemCodeID sets the "source_redeem_code_id" field.
+func (u *UserSubscriptionUpsert) SetSourceRedeemCodeID(v int64) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldSourceRedeemCodeID, v)
+	return u
+}
+
+// UpdateSourceRedeemCodeID sets the "source_redeem_code_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateSourceRedeemCodeID() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldSourceRedeemCodeID)
+	return u
+}
+
+// AddSourceRedeemCodeID adds v to the "source_redeem_code_id" field.
+func (u *UserSubscriptionUpsert) AddSourceRedeemCodeID(v int64) *UserSubscriptionUpsert {
+	u.Add(usersubscription.FieldSourceRedeemCodeID, v)
+	return u
+}
+
+// ClearSourceRedeemCodeID clears the value of the "source_redeem_code_id" field.
+func (u *UserSubscriptionUpsert) ClearSourceRedeemCodeID() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldSourceRedeemCodeID)
+	return u
+}
+
 // SetAssignedAt sets the "assigned_at" field.
 func (u *UserSubscriptionUpsert) SetAssignedAt(v time.Time) *UserSubscriptionUpsert {
 	u.Set(usersubscription.FieldAssignedAt, v)
@@ -1140,6 +1266,76 @@ func (u *UserSubscriptionUpsertOne) UpdateAssignedBy() *UserSubscriptionUpsertOn
 func (u *UserSubscriptionUpsertOne) ClearAssignedBy() *UserSubscriptionUpsertOne {
 	return u.Update(func(s *UserSubscriptionUpsert) {
 		s.ClearAssignedBy()
+	})
+}
+
+// SetManagedByUserID sets the "managed_by_user_id" field.
+func (u *UserSubscriptionUpsertOne) SetManagedByUserID(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetManagedByUserID(v)
+	})
+}
+
+// AddManagedByUserID adds v to the "managed_by_user_id" field.
+func (u *UserSubscriptionUpsertOne) AddManagedByUserID(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddManagedByUserID(v)
+	})
+}
+
+// UpdateManagedByUserID sets the "managed_by_user_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateManagedByUserID() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateManagedByUserID()
+	})
+}
+
+// ClearManagedByUserID clears the value of the "managed_by_user_id" field.
+func (u *UserSubscriptionUpsertOne) ClearManagedByUserID() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearManagedByUserID()
+	})
+}
+
+// SetSourceType sets the "source_type" field.
+func (u *UserSubscriptionUpsertOne) SetSourceType(v string) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetSourceType(v)
+	})
+}
+
+// UpdateSourceType sets the "source_type" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateSourceType() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateSourceType()
+	})
+}
+
+// SetSourceRedeemCodeID sets the "source_redeem_code_id" field.
+func (u *UserSubscriptionUpsertOne) SetSourceRedeemCodeID(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetSourceRedeemCodeID(v)
+	})
+}
+
+// AddSourceRedeemCodeID adds v to the "source_redeem_code_id" field.
+func (u *UserSubscriptionUpsertOne) AddSourceRedeemCodeID(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddSourceRedeemCodeID(v)
+	})
+}
+
+// UpdateSourceRedeemCodeID sets the "source_redeem_code_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateSourceRedeemCodeID() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateSourceRedeemCodeID()
+	})
+}
+
+// ClearSourceRedeemCodeID clears the value of the "source_redeem_code_id" field.
+func (u *UserSubscriptionUpsertOne) ClearSourceRedeemCodeID() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearSourceRedeemCodeID()
 	})
 }
 
@@ -1638,6 +1834,76 @@ func (u *UserSubscriptionUpsertBulk) UpdateAssignedBy() *UserSubscriptionUpsertB
 func (u *UserSubscriptionUpsertBulk) ClearAssignedBy() *UserSubscriptionUpsertBulk {
 	return u.Update(func(s *UserSubscriptionUpsert) {
 		s.ClearAssignedBy()
+	})
+}
+
+// SetManagedByUserID sets the "managed_by_user_id" field.
+func (u *UserSubscriptionUpsertBulk) SetManagedByUserID(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetManagedByUserID(v)
+	})
+}
+
+// AddManagedByUserID adds v to the "managed_by_user_id" field.
+func (u *UserSubscriptionUpsertBulk) AddManagedByUserID(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddManagedByUserID(v)
+	})
+}
+
+// UpdateManagedByUserID sets the "managed_by_user_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateManagedByUserID() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateManagedByUserID()
+	})
+}
+
+// ClearManagedByUserID clears the value of the "managed_by_user_id" field.
+func (u *UserSubscriptionUpsertBulk) ClearManagedByUserID() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearManagedByUserID()
+	})
+}
+
+// SetSourceType sets the "source_type" field.
+func (u *UserSubscriptionUpsertBulk) SetSourceType(v string) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetSourceType(v)
+	})
+}
+
+// UpdateSourceType sets the "source_type" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateSourceType() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateSourceType()
+	})
+}
+
+// SetSourceRedeemCodeID sets the "source_redeem_code_id" field.
+func (u *UserSubscriptionUpsertBulk) SetSourceRedeemCodeID(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetSourceRedeemCodeID(v)
+	})
+}
+
+// AddSourceRedeemCodeID adds v to the "source_redeem_code_id" field.
+func (u *UserSubscriptionUpsertBulk) AddSourceRedeemCodeID(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.AddSourceRedeemCodeID(v)
+	})
+}
+
+// UpdateSourceRedeemCodeID sets the "source_redeem_code_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateSourceRedeemCodeID() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateSourceRedeemCodeID()
+	})
+}
+
+// ClearSourceRedeemCodeID clears the value of the "source_redeem_code_id" field.
+func (u *UserSubscriptionUpsertBulk) ClearSourceRedeemCodeID() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearSourceRedeemCodeID()
 	})
 }
 
