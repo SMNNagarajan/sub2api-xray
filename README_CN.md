@@ -665,3 +665,7 @@ Copyright (c) 2026 Wesley Liddick
 **如果觉得有用，请给个 Star 支持一下！**
 
 </div>
+
+## 社区致谢
+
+- [LINUX DO](https://linux.do/) - 新的理想型社区

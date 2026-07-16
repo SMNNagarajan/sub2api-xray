@@ -718,3 +718,7 @@ Copyright (c) 2026 Wesley Liddick
 **If you find this project useful, please give it a star!**
 
 </div>
+
+## Community Acknowledgement
+
+- [LINUX DO](https://linux.do/) - A new kind of ideal community.

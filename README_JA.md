@@ -601,3 +601,7 @@ Copyright (c) 2026 Wesley Liddick
 **このプロジェクトが役に立ったら、ぜひスターをお願いします！**
 
 </div>
+
+## コミュニティへの謝辞
+
+- [LINUX DO](https://linux.do/) - 新しい理想のコミュニティ
