@@ -195,7 +195,7 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: ${{ secrets.DOCKERHUB_USERNAME }}/sub2api
-          short-description: "Sub2API - AI API Gateway Platform"
+          short-description: "Sub2API Xray - AI API Gateway Platform"
           readme-filepath: ./deploy/DOCKER.md
 
       # Send Telegram notification
@@ -232,7 +232,7 @@ jobs:
           fi
 
           # 构建消息内容
-          MESSAGE="🚀 *Sub2API 新版本发布！*"$'\n'$'\n'
+          MESSAGE="🚀 *Sub2API Xray 新版本发布！*"$'\n'$'\n'
           MESSAGE+="📦 版本号: \`${VERSION}\`"$'\n'$'\n'
 
           # 添加更新内容

@@ -185,3 +185,23 @@ func TestUpdateServiceRollbackToVersionAcceptsVPrefix(t *testing.T) {
 	require.NotErrorIs(t, err, ErrRollbackVersionNotAllowed)
 	require.Contains(t, err.Error(), "no compatible release found")
 }
+
+func TestCompareVersionsSupportsXrayRevisions(t *testing.T) {
+	tests := []struct {
+		name     string
+		current  string
+		latest   string
+		expected int
+	}{
+		{name: "newer xray revision", current: "0.1.157-xray1", latest: "0.1.157-xray2", expected: -1},
+		{name: "newer upstream base wins", current: "0.1.157-xray9", latest: "0.1.158-xray1", expected: -1},
+		{name: "equal custom versions", current: "v0.1.157-xray1", latest: "0.1.157-xray1", expected: 0},
+		{name: "custom revision follows base release", current: "0.1.157", latest: "0.1.157-xray1", expected: -1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, compareVersions(tt.current, tt.latest))
+		})
+	}
+}

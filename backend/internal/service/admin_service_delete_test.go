@@ -730,7 +730,7 @@ func TestAdminService_DeleteProxy_Error(t *testing.T) {
 func TestAdminService_UpdateProxyRejectsRevokingPublicProxyInUseByUsers(t *testing.T) {
 	public := false
 	repo := &proxyRepoStub{
-		proxy:                 &Proxy{ID: 33, Name: "public", IsPublic: true, Status: StatusActive},
+		proxy:                 &Proxy{ID: 33, Name: "public", IsPublic: true, Kind: "standard", Protocol: "http", Status: StatusActive},
 		userOwnedAccountCount: 1,
 	}
 	svc := &adminServiceImpl{proxyRepo: repo}

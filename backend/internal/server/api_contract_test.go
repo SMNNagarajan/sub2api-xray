@@ -474,7 +474,9 @@ func TestAPIContracts(t *testing.T) {
 						"used_at": "2025-01-02T03:04:05Z",
 						"created_at": "2025-01-02T03:04:05Z",
 						"group_id": null,
-						"validity_days": 0
+						"validity_days": 0,
+						"max_uses": 1,
+						"used_count": 0
 					}
 				]
 			}`,
@@ -603,6 +605,8 @@ func TestAPIContracts(t *testing.T) {
 							"image_size": null,
 							"image_input_size": null,
 							"image_output_size": null,
+							"image_input_tokens": 0,
+							"image_input_cost": 0,
 							"image_output_tokens": 0,
 							"image_output_cost": 0,
 							"image_size_source": null,
@@ -684,6 +688,8 @@ func TestAPIContracts(t *testing.T) {
 					service.SettingPaymentVisibleMethodWxpaySource:                       service.VisibleMethodSourceOfficialWechat,
 					service.SettingPaymentVisibleMethodAlipayEnabled:                     "true",
 					service.SettingPaymentVisibleMethodWxpayEnabled:                      "false",
+					service.SettingKeyOpenAILowUpstreamRatePriorityEnabled:               "true",
+					service.SettingKeyOpenAIOAuthSchedulingRateMultiplier:                "0.05",
 					"openai_advanced_scheduler_enabled":                                  "true",
 					service.SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled:       "false",
 					service.SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled: "false",
@@ -704,6 +710,8 @@ func TestAPIContracts(t *testing.T) {
 						"frontend_url": "",
 						"totp_enabled": false,
 						"totp_encryption_key_configured": false,
+						"session_binding_enabled": true,
+						"audit_log_retention_days": 180,
 						"login_agreement_enabled": false,
 						"login_agreement_mode": "modal",
 						"login_agreement_updated_at": "2026-03-31",
@@ -836,6 +844,7 @@ func TestAPIContracts(t *testing.T) {
 					"affiliate_rebate_freeze_hours": 0,
 					"affiliate_rebate_duration_days": 0,
 					"affiliate_rebate_per_invitee_cap": 0,
+					"affiliate_admin_recharge_enabled": false,
 					"default_user_rpm_limit": 0,
 					"default_subscriptions": [],
 					"enable_model_fallback": false,
@@ -878,6 +887,8 @@ func TestAPIContracts(t *testing.T) {
 					"payment_visible_method_wxpay_source": "official_wxpay",
 					"payment_visible_method_alipay_enabled": true,
 					"payment_visible_method_wxpay_enabled": false,
+					"openai_low_upstream_rate_priority_enabled": true,
+					"openai_oauth_scheduling_rate_multiplier": 0.05,
 					"openai_advanced_scheduler_enabled": true,
 					"openai_advanced_scheduler_sticky_weighted_enabled": false,
 					"openai_advanced_scheduler_subscription_priority_enabled": false,
@@ -889,6 +900,7 @@ func TestAPIContracts(t *testing.T) {
 					"openai_advanced_scheduler_weight_ttft": "",
 					"openai_advanced_scheduler_weight_reset": "",
 					"openai_advanced_scheduler_weight_quota_headroom": "",
+					"openai_advanced_scheduler_weight_upstream_cost": "",
 					"openai_advanced_scheduler_weight_previous_response": "",
 					"openai_advanced_scheduler_weight_session_sticky": "",
 					"openai_advanced_scheduler_effective_lb_top_k": "7",
@@ -899,6 +911,7 @@ func TestAPIContracts(t *testing.T) {
 					"openai_advanced_scheduler_effective_weight_ttft": "0.5",
 					"openai_advanced_scheduler_effective_weight_reset": "0",
 					"openai_advanced_scheduler_effective_weight_quota_headroom": "0",
+					"openai_advanced_scheduler_effective_weight_upstream_cost": "0",
 					"openai_advanced_scheduler_effective_weight_previous_response": "5",
 					"openai_advanced_scheduler_effective_weight_session_sticky": "3",
 					"openai_codex_user_agent":           "",
@@ -1012,6 +1025,8 @@ func TestAPIContracts(t *testing.T) {
 						"invitation_code_enabled": false,
 						"totp_enabled": false,
 						"totp_encryption_key_configured": false,
+						"session_binding_enabled": true,
+						"audit_log_retention_days": 180,
 						"login_agreement_enabled": false,
 						"login_agreement_mode": "modal",
 						"login_agreement_updated_at": "2026-03-31",
@@ -1083,7 +1098,7 @@ func TestAPIContracts(t *testing.T) {
 					"google_oauth_client_secret_configured": false,
 					"google_oauth_redirect_url": "",
 					"google_oauth_frontend_redirect_url": "/auth/oauth/callback",
-					"site_name": "Sub2API",
+					"site_name": "Sub2API Xray",
 					"site_logo": "",
 					"site_subtitle": "Subscription to API Conversion Platform",
 					"api_base_url": "",
@@ -1112,6 +1127,7 @@ func TestAPIContracts(t *testing.T) {
 					"affiliate_rebate_freeze_hours": 0,
 					"affiliate_rebate_duration_days": 0,
 					"affiliate_rebate_per_invitee_cap": 0,
+					"affiliate_admin_recharge_enabled": false,
 					"default_user_rpm_limit": 0,
 					"default_subscriptions": [],
 					"enable_model_fallback": false,
@@ -1151,6 +1167,8 @@ func TestAPIContracts(t *testing.T) {
 					"payment_visible_method_wxpay_source": "",
 					"payment_visible_method_alipay_enabled": false,
 					"payment_visible_method_wxpay_enabled": false,
+					"openai_low_upstream_rate_priority_enabled": false,
+					"openai_oauth_scheduling_rate_multiplier": 1,
 					"openai_advanced_scheduler_enabled": false,
 					"openai_advanced_scheduler_sticky_weighted_enabled": false,
 					"openai_advanced_scheduler_subscription_priority_enabled": false,
@@ -1162,6 +1180,7 @@ func TestAPIContracts(t *testing.T) {
 					"openai_advanced_scheduler_weight_ttft": "",
 					"openai_advanced_scheduler_weight_reset": "",
 					"openai_advanced_scheduler_weight_quota_headroom": "",
+					"openai_advanced_scheduler_weight_upstream_cost": "",
 					"openai_advanced_scheduler_weight_previous_response": "",
 					"openai_advanced_scheduler_weight_session_sticky": "",
 					"openai_advanced_scheduler_effective_lb_top_k": "7",
@@ -1172,6 +1191,7 @@ func TestAPIContracts(t *testing.T) {
 					"openai_advanced_scheduler_effective_weight_ttft": "0.5",
 					"openai_advanced_scheduler_effective_weight_reset": "0",
 					"openai_advanced_scheduler_effective_weight_quota_headroom": "0",
+					"openai_advanced_scheduler_effective_weight_upstream_cost": "0",
 					"openai_advanced_scheduler_effective_weight_previous_response": "5",
 					"openai_advanced_scheduler_effective_weight_session_sticky": "3",
 					"openai_codex_user_agent":           "",
@@ -1374,7 +1394,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	settingRepo := newStubSettingRepo()
 	settingService := service.NewSettingService(settingRepo, cfg)
 
-	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	adminService := service.NewAdminService(userRepo, groupRepo, &accountRepo, proxyRepo, apiKeyRepo, redeemRepo, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	authHandler := handler.NewAuthHandler(cfg, nil, userService, settingService, nil, redeemService, nil, nil)
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	usageHandler := handler.NewUsageHandler(usageService, apiKeyService, nil, nil)

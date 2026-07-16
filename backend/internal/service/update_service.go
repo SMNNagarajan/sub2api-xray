@@ -30,7 +30,7 @@ var (
 const (
 	updateCacheKey = "update_check_cache"
 	updateCacheTTL = 1200 // 20 minutes
-	githubRepo     = "Wei-Shaw/sub2api"
+	githubRepo     = "SMNNagarajan/sub2api-xray"
 
 	// Security: allowed download domains for updates
 	allowedDownloadHost = "github.com"
@@ -637,29 +637,46 @@ func (s *UpdateService) saveToCache(ctx context.Context, info *UpdateInfo) {
 	_ = s.cache.SetUpdateInfo(ctx, string(data), time.Duration(updateCacheTTL)*time.Second)
 }
 
-// compareVersions compares two semantic versions
+// compareVersions compares upstream semantic versions and Xray fork revisions.
 func compareVersions(current, latest string) int {
 	currentParts := parseVersion(current)
 	latestParts := parseVersion(latest)
 
 	for i := 0; i < 3; i++ {
-		if currentParts[i] < latestParts[i] {
+		if currentParts.core[i] < latestParts.core[i] {
 			return -1
 		}
-		if currentParts[i] > latestParts[i] {
+		if currentParts.core[i] > latestParts.core[i] {
 			return 1
 		}
+	}
+	if currentParts.xray < latestParts.xray {
+		return -1
+	}
+	if currentParts.xray > latestParts.xray {
+		return 1
 	}
 	return 0
 }
 
-func parseVersion(v string) [3]int {
+type parsedVersion struct {
+	core [3]int
+	xray int
+}
+
+func parseVersion(v string) parsedVersion {
 	v = strings.TrimPrefix(v, "v")
-	parts := strings.Split(v, ".")
-	result := [3]int{0, 0, 0}
+	core, suffix, hasSuffix := strings.Cut(v, "-xray")
+	parts := strings.Split(core, ".")
+	result := parsedVersion{}
 	for i := 0; i < len(parts) && i < 3; i++ {
 		if parsed, err := strconv.Atoi(parts[i]); err == nil {
-			result[i] = parsed
+			result.core[i] = parsed
+		}
+	}
+	if hasSuffix {
+		if parsed, err := strconv.Atoi(suffix); err == nil && parsed >= 0 {
+			result.xray = parsed
 		}
 	}
 	return result

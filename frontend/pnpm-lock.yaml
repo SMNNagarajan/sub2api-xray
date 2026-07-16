@@ -65,6 +65,9 @@ importers:
         specifier: ^4.2.5
         version: 4.6.4(vue@3.5.26(typescript@5.6.3))
     devDependencies:
+      '@intlify/message-compiler':
+        specifier: 9.14.5
+        version: 9.14.5
       '@types/file-saver':
         specifier: ^2.0.7
         version: 2.0.7

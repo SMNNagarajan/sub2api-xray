@@ -323,7 +323,7 @@ func (m *XrayRuntimeManager) start(ctx context.Context, proxyID int64, ownerUser
 	}
 	inst := &xrayRuntimeInstance{
 		proxyID:     proxyID,
-		ownerUserID: cloneInt64Pointer(ownerUserID),
+		ownerUserID: cloneXrayOwnerID(ownerUserID),
 		hash:        hash,
 		port:        port,
 		cmd:         cmd,
@@ -348,7 +348,7 @@ func (m *XrayRuntimeManager) start(ctx context.Context, proxyID int64, ownerUser
 	return inst, nil
 }
 
-func cloneInt64Pointer(value *int64) *int64 {
+func cloneXrayOwnerID(value *int64) *int64 {
 	if value == nil {
 		return nil
 	}
