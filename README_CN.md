@@ -652,6 +652,10 @@ sub2api/
     └── install.sh            # 一键安装脚本
 ```
 
+## 社区致谢
+
+- [LINUX DO](https://linux.do/) - 新的理想型社区
+
 ## 许可证
 
 本项目基于 [GNU 宽通用公共许可证 v3.0](LICENSE)（或更高版本）授权。
@@ -665,7 +669,3 @@ Copyright (c) 2026 Wesley Liddick
 **如果觉得有用，请给个 Star 支持一下！**
 
 </div>
-
-## 社区致谢
-
-- [LINUX DO](https://linux.do/) - 新的理想型社区

@@ -705,6 +705,10 @@ sub2api/
     └── install.sh            # One-click installation script
 ```
 
+## Community Acknowledgement
+
+- [LINUX DO](https://linux.do/) - A new kind of ideal community.
+
 ## License
 
 This project is licensed under the [GNU Lesser General Public License v3.0](LICENSE) (or later).
@@ -718,7 +722,3 @@ Copyright (c) 2026 Wesley Liddick
 **If you find this project useful, please give it a star!**
 
 </div>
-
-## Community Acknowledgement
-
-- [LINUX DO](https://linux.do/) - A new kind of ideal community.

@@ -588,6 +588,10 @@ sub2api/
     └── install.sh            # ワンクリックインストールスクリプト
 ```
 
+## コミュニティへの謝辞
+
+- [LINUX DO](https://linux.do/) - 新しい理想のコミュニティ
+
 ## ライセンス
 
 本プロジェクトは [GNU Lesser General Public License v3.0](LICENSE)（またはそれ以降のバージョン）の下でライセンスされています。
@@ -601,7 +605,3 @@ Copyright (c) 2026 Wesley Liddick
 **このプロジェクトが役に立ったら、ぜひスターをお願いします！**
 
 </div>
-
-## コミュニティへの謝辞
-
-- [LINUX DO](https://linux.do/) - 新しい理想のコミュニティ
