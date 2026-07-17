@@ -2,9 +2,9 @@
   <AppLayout>
     <TablePageLayout>
       <template #filters>
-        <div class="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
-          <div class="flex flex-1 flex-wrap items-center gap-3">
-            <div class="relative w-full sm:w-64">
+        <div :class="['flex flex-col justify-between', resource === 'proxies' ? 'gap-3 2xl:flex-row 2xl:items-start' : 'gap-4 lg:flex-row lg:items-start']">
+          <div :class="['flex flex-1 flex-wrap items-center', resource === 'proxies' ? 'gap-2' : 'gap-3']">
+            <div :class="['relative w-full', resource === 'proxies' ? 'sm:w-72 lg:w-64 xl:w-72' : 'sm:w-64']">
               <Icon name="search" size="md" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
               <input
                 v-model="filters.search"
@@ -65,7 +65,7 @@
             <div class="relative">
               <button class="btn btn-secondary" type="button" :title="mr('actions.columns')" @click="showColumnSettings = !showColumnSettings">
                 <Icon name="grid" size="md" class="mr-2" />
-                <span class="hidden md:inline">{{ mr('actions.columns') }}</span>
+                <span v-if="resource !== 'proxies'" class="hidden md:inline">{{ mr('actions.columns') }}</span>
               </button>
               <div v-if="showColumnSettings" class="absolute right-0 top-full z-50 mt-1 max-h-80 w-48 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-dark-600 dark:bg-dark-800">
                 <button
@@ -80,14 +80,14 @@
                 </button>
               </div>
             </div>
-            <button v-if="resource === 'proxies'" class="btn btn-secondary" @click="openProxyImport">
-              {{ mr('actions.importNodes') }}
+            <button v-if="resource === 'proxies'" class="btn btn-secondary" :title="mr('actions.importNodes')" :aria-label="mr('actions.importNodes')" @click="openProxyImport">
+              <Icon name="upload" size="sm" />
             </button>
-            <button v-if="resource === 'proxies'" class="btn btn-secondary" @click="exportProxies">
-              {{ mr('actions.export') }}
+            <button v-if="resource === 'proxies'" class="btn btn-secondary" :title="mr('actions.export')" :aria-label="mr('actions.export')" @click="exportProxies">
+              <Icon name="download" size="sm" />
             </button>
-            <button v-if="resource === 'proxies'" class="btn btn-secondary" @click="openProxySources">
-              {{ mr('actions.sources') }}
+            <button v-if="resource === 'proxies'" class="btn btn-secondary" :title="mr('actions.sources')" :aria-label="mr('actions.sources')" @click="openProxySources">
+              <Icon name="link" size="sm" />
             </button>
             <button v-if="resource === 'assigned-subscriptions'" class="btn btn-secondary" @click="openBulkAssign">
               {{ mr('actions.bulkAssign') }}
@@ -134,7 +134,13 @@
             <div class="rounded-md border border-gray-200 p-3 dark:border-dark-700"><div class="text-xs text-gray-500">{{ mr('stats.actualCost') }}</div><div class="mt-1 text-xl font-semibold text-emerald-600">${{ Number(accountUsageStats.actual_cost || 0).toFixed(4) }}</div></div>
             <div class="rounded-md border border-gray-200 p-3 dark:border-dark-700"><div class="text-xs text-gray-500">{{ mr('stats.averageLatency') }}</div><div class="mt-1 text-xl font-semibold">{{ Number(accountUsageStats.average_duration_ms || 0).toFixed(0) }} ms</div></div>
           </div>
-          <DataTable :columns="alignedColumns" :data="items" :loading="loading" row-key="id">
+          <DataTable
+            :columns="alignedColumns"
+            :data="items"
+            :loading="loading"
+            :expandable-actions="resource !== 'proxies'"
+            row-key="id"
+          >
           <template v-if="selectableResource" #header-select>
             <input
               type="checkbox"
@@ -325,8 +331,16 @@
       </div>
     </div>
 
-    <div v-if="editorOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 sm:p-4">
-      <div :class="['flex max-h-[calc(100dvh-1rem)] w-full flex-col overflow-hidden rounded-lg bg-white shadow-xl dark:bg-dark-800 sm:max-h-[calc(100dvh-2rem)]', resource === 'proxies' ? 'max-w-4xl' : 'max-w-3xl']">
+    <MyProxyEditorDialog
+      :show="editorOpen && resource === 'proxies'"
+      :proxy="proxyEditorItem"
+      :initial-mode="proxyEditorInitialMode"
+      @close="closeProxyEditor"
+      @saved="handleProxySaved"
+    />
+
+    <div v-if="editorOpen && resource !== 'proxies'" class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-2 sm:p-4">
+      <div class="flex max-h-[calc(100dvh-1rem)] w-full max-w-3xl flex-col overflow-hidden rounded-lg bg-white shadow-xl dark:bg-dark-800 sm:max-h-[calc(100dvh-2rem)]">
         <div class="flex shrink-0 items-center justify-between border-b border-gray-200 p-4 dark:border-dark-700">
           <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ editingId ? t('common.edit') : config.createLabel || t('common.create') }}</h2>
           <button class="btn btn-sm btn-secondary" @click="editorOpen = false">{{ t('common.close') }}</button>
@@ -680,71 +694,6 @@
               <label class="block md:col-span-2">
                 <span class="mb-1 block text-sm text-gray-700 dark:text-dark-100">{{ mr('fields.notes') }}</span>
                 <textarea v-model="editorForm.account.notes" class="input min-h-20"></textarea>
-              </label>
-            </div>
-
-            <div v-else-if="resource === 'proxies'" class="grid gap-4 md:grid-cols-2">
-              <label class="block">
-                <span class="mb-1 block text-sm text-gray-700 dark:text-dark-100">{{ mr('fields.name') }}</span>
-                <input v-model.trim="editorForm.proxy.name" class="input" required />
-              </label>
-              <div class="block">
-                <span class="mb-1 block text-sm text-gray-700 dark:text-dark-100">{{ mr('fields.kind') }}</span>
-                <div class="grid h-10 grid-cols-2 rounded-md bg-gray-100 p-1 dark:bg-dark-900">
-                  <button
-                    v-for="option in proxyKindOptions"
-                    :key="String(option.value)"
-                    type="button"
-                    :class="['rounded px-3 text-sm font-medium transition-colors', editorForm.proxy.kind === option.value ? 'bg-white text-primary-600 shadow-sm dark:bg-dark-700 dark:text-primary-300' : 'text-gray-500 hover:text-gray-800 dark:text-dark-300 dark:hover:text-white']"
-                    @click="editorForm.proxy.kind = String(option.value)"
-                  >
-                    {{ option.label }}
-                  </button>
-                </div>
-              </div>
-              <label class="block">
-                <span class="mb-1 block text-sm text-gray-700 dark:text-dark-100">{{ mr('fields.protocol') }}</span>
-                <Select v-model="editorForm.proxy.protocol" :options="proxyEditorProtocolOptions" :searchable="false" />
-              </label>
-              <label class="block">
-                <span class="mb-1 block text-sm text-gray-700 dark:text-dark-100">{{ mr('fields.status') }}</span>
-                <Select v-model="editorForm.proxy.status" :options="proxyStatusOptions" :searchable="false" />
-              </label>
-              <label class="block">
-                <span class="mb-1 block text-sm text-gray-700 dark:text-dark-100">{{ mr('fields.host') }}</span>
-                <input v-model.trim="editorForm.proxy.host" class="input" />
-              </label>
-              <label class="block">
-                <span class="mb-1 block text-sm text-gray-700 dark:text-dark-100">{{ mr('fields.port') }}</span>
-                <input v-model.number="editorForm.proxy.port" type="number" min="1" max="65535" class="input" />
-              </label>
-              <label class="block">
-                <span class="mb-1 block text-sm text-gray-700 dark:text-dark-100">{{ mr('fields.username') }}</span>
-                <input v-model.trim="editorForm.proxy.username" class="input" autocomplete="off" :placeholder="editingId ? mr('fields.leaveBlankToKeep') : ''" @input="proxyUsernameDirty = true" />
-              </label>
-              <label class="block">
-                <span class="mb-1 block text-sm text-gray-700 dark:text-dark-100">{{ mr('fields.password') }}</span>
-                <input v-model="editorForm.proxy.password" type="password" class="input" autocomplete="new-password" :placeholder="editingId ? mr('fields.leaveBlankToKeep') : ''" @input="proxyPasswordDirty = true" />
-              </label>
-              <label class="block">
-                <span class="mb-1 block text-sm text-gray-700 dark:text-dark-100">{{ mr('fields.fallbackMode') }}</span>
-                <Select v-model="editorForm.proxy.fallback_mode" :options="fallbackModeOptions" :searchable="false" />
-              </label>
-              <label class="block">
-                <span class="mb-1 block text-sm text-gray-700 dark:text-dark-100">{{ mr('fields.backupProxyId') }}</span>
-                <input v-model.number="editorForm.proxy.backup_proxy_id" type="number" min="0" class="input" />
-              </label>
-              <label class="block">
-                <span class="mb-1 block text-sm text-gray-700 dark:text-dark-100">{{ mr('fields.expiresAt') }}</span>
-                <input v-model="editorForm.proxy.expires_at" type="datetime-local" class="input" />
-              </label>
-              <label class="block">
-                <span class="mb-1 block text-sm text-gray-700 dark:text-dark-100">{{ mr('fields.expiryWarnDays') }}</span>
-                <input v-model.number="editorForm.proxy.expiry_warn_days" type="number" min="0" class="input" />
-              </label>
-              <label class="block md:col-span-2">
-                <span class="mb-1 block text-sm text-gray-700 dark:text-dark-100">{{ mr('fields.extraJson') }}</span>
-                <textarea v-model="editorForm.proxy.extra_text" class="input min-h-20 font-mono text-xs" spellcheck="false" @input="proxyExtraDirty = true"></textarea>
               </label>
             </div>
 
@@ -1167,6 +1116,7 @@ import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
 import type { Column } from '@/components/common/types'
 import Icon from '@/components/icons/Icon.vue'
+import MyProxyEditorDialog from '@/components/user/MyProxyEditorDialog.vue'
 import { myResourcesApi, type ResourceItem, type ResourcePage, type UserOAuthCredentialsResult } from '@/api/myResources'
 import { useAppStore } from '@/stores/app'
 import type { GroupPlatform } from '@/types'
@@ -1444,6 +1394,8 @@ const editorOpen = ref(false)
 const editorText = ref('')
 const editorError = ref('')
 const editingId = ref<number | null>(null)
+const proxyEditorItem = ref<ResourceItem | null>(null)
+const proxyEditorInitialMode = ref<'standard' | 'batch'>('standard')
 const proxyUsernameDirty = ref(false)
 const proxyPasswordDirty = ref(false)
 const proxyExtraDirty = ref(false)
@@ -1646,9 +1598,6 @@ const accountStatusOptions = computed<SelectOption[]>(() => USER_ACCOUNT_STATUS_
   value: option.value,
   label: mr(`states.${option.value}`),
 })))
-const proxyStatusOptions = computed<SelectOption[]>(() => ['active', 'inactive', 'disabled'].map(value => ({ value, label: mr(`states.${value}`) })))
-const proxyEditorProtocolOptions = computed<SelectOption[]>(() => editorForm.proxy.kind === 'xray' ? xrayProxyProtocolOptions : standardProxyProtocolOptions)
-const fallbackModeOptions = computed<SelectOption[]>(() => ['none', 'proxy', 'direct'].map(value => ({ value, label: mr(`states.${value}`) })))
 const booleanStatusOptions = computed<SelectOption[]>(() => [
   { value: true, label: mr('states.enabled') },
   { value: false, label: mr('states.disabled') },
@@ -2386,6 +2335,13 @@ async function ensureReferenceOptions(): Promise<void> {
 }
 
 async function openCreate(): Promise<void> {
+  if (resource.value === 'proxies') {
+    editingId.value = null
+    proxyEditorItem.value = null
+    proxyEditorInitialMode.value = 'standard'
+    editorOpen.value = true
+    return
+  }
   await ensureReferenceOptions()
   editingId.value = null
   editorMode.value = 'default'
@@ -2401,6 +2357,13 @@ async function openCreate(): Promise<void> {
 }
 
 async function openEdit(item: ResourceItem): Promise<void> {
+  if (resource.value === 'proxies') {
+    editingId.value = Number(item.id)
+    proxyEditorItem.value = item
+    proxyEditorInitialMode.value = 'standard'
+    editorOpen.value = true
+    return
+  }
   await ensureReferenceOptions()
   editingId.value = Number(item.id)
   editorMode.value = 'default'
@@ -2953,10 +2916,20 @@ function downloadBlob(filename: string, blob: Blob): void {
 
 function openProxyImport(): void {
   editingId.value = null
-  editorMode.value = 'proxyImport'
-  editorError.value = ''
-  editorText.value = JSON.stringify({ name_prefix: 'node', content: '' }, null, 2)
+  proxyEditorItem.value = null
+  proxyEditorInitialMode.value = 'batch'
   editorOpen.value = true
+}
+
+function closeProxyEditor(): void {
+  editorOpen.value = false
+  proxyEditorItem.value = null
+  proxyEditorInitialMode.value = 'standard'
+}
+
+async function handleProxySaved(): Promise<void> {
+  closeProxyEditor()
+  await loadData()
 }
 
 function resetCodexImportForm(): void {

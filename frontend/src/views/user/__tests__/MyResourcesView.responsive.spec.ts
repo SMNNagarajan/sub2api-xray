@@ -7,17 +7,21 @@ import en from '@/i18n/locales/en'
 import zh from '@/i18n/locales/zh'
 
 const source = readFileSync(resolve(process.cwd(), 'src/views/user/MyResourcesView.vue'), 'utf8')
+const proxyEditorSource = readFileSync(resolve(process.cwd(), 'src/components/user/MyProxyEditorDialog.vue'), 'utf8')
+const globalStyles = readFileSync(resolve(process.cwd(), 'src/style.css'), 'utf8')
 
 describe('MyResourcesView responsive localization', () => {
   it('delegates responsive tables and mobile cards to the shared DataTable', () => {
-    expect(source).toContain('<DataTable :columns="alignedColumns"')
+    expect(source).toContain('<DataTable')
+    expect(source).toContain(':columns="alignedColumns"')
     expect(source).not.toContain('sm:sticky sm:right-0')
     expect(source).not.toContain('<div v-else class="space-y-4">')
   })
 
   it('aligns every user resource with the administrator table system', () => {
     expect(source).toContain('<TablePageLayout>')
-    expect(source).toContain('<DataTable :columns="alignedColumns"')
+    expect(source).toContain('<DataTable')
+    expect(source).toContain(':columns="alignedColumns"')
     expect(source).not.toContain('adminAlignedResource')
     expect(source).not.toContain('<div v-else class="space-y-4">')
     for (const resource of ['groups', 'accounts', 'proxies', 'assigned-subscriptions', 'redeem-codes', 'account-logs', 'upstream-errors']) {
@@ -58,7 +62,12 @@ describe('MyResourcesView responsive localization', () => {
   it('uses project Select controls and proxy-specific filters', () => {
     expect((source.match(/<Select/g) || []).length).toBeGreaterThan(10)
     expect((source.match(/<select[^>]+multiple/g) || []).length).toBeGreaterThanOrEqual(3)
-    expect(source).toContain("resource === 'proxies' ? 'max-w-4xl' : 'max-w-3xl'")
+    expect(source).toContain('<MyProxyEditorDialog')
+    expect(proxyEditorSource).toContain('<BaseDialog')
+    expect(proxyEditorSource).toContain('width="normal"')
+    expect(proxyEditorSource).toContain("type CreateMode = 'standard' | 'batch'")
+    expect(globalStyles).toContain('max-h-[calc(100dvh-1rem)] sm:max-h-[calc(100dvh-2rem)]')
+    expect(globalStyles).toContain('@apply flex-1 overflow-y-auto')
     expect(source).toContain('v-model="filters.type"')
     expect(source).toContain('v-model="filters.protocol"')
     expect(source).toContain("mr(`filters.searchByResource.${resource.value}`)")
@@ -66,12 +75,12 @@ describe('MyResourcesView responsive localization', () => {
   })
 
   it('does not submit redacted proxy credentials unless the user edits them', () => {
-    expect(source).toContain('proxyUsernameDirty.value')
-    expect(source).toContain('proxyPasswordDirty.value')
-    expect(source).toContain('proxyExtraDirty.value')
-    expect(source).toContain('delete out.username')
-    expect(source).toContain('delete out.password')
-    expect(source).toContain('delete out.extra')
+    expect(proxyEditorSource).toContain('usernameDirty.value')
+    expect(proxyEditorSource).toContain('passwordDirty.value')
+    expect(proxyEditorSource).toContain('nodeContentDirty.value')
+    expect(proxyEditorSource).toContain('if (!props.proxy || usernameDirty.value)')
+    expect(proxyEditorSource).toContain('if (!props.proxy || passwordDirty.value)')
+    expect(proxyEditorSource).toContain("if (inputMode.value === 'xray' && nodeContentDirty.value)")
   })
 
   it('supports repeatable redeem codes through owner-scoped usage details', () => {

@@ -4896,6 +4896,9 @@ func parseProxyNodeLines(raw string) []parsedProxyNode {
 	if decoded, ok := decodeProxySubscriptionPayload(raw); ok {
 		raw = decoded
 	}
+	if nodes, ok := parseSingBoxProxyNodes(raw); ok {
+		return nodes
+	}
 	if nodes, ok := parseClashProxyNodes(raw); ok {
 		return nodes
 	}
@@ -4909,6 +4912,116 @@ func parseProxyNodeLines(raw string) []parsedProxyNode {
 		out = append(out, parseProxyNode(line))
 	}
 	return out
+}
+
+func parseSingBoxProxyNodes(raw string) ([]parsedProxyNode, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if !strings.HasPrefix(trimmed, "{") && !strings.HasPrefix(trimmed, "[") {
+		return nil, false
+	}
+
+	var document any
+	if err := json.Unmarshal([]byte(trimmed), &document); err != nil {
+		return nil, false
+	}
+
+	items := singBoxOutboundItems(document)
+	if len(items) == 0 {
+		return nil, false
+	}
+	out := make([]parsedProxyNode, 0, len(items))
+	for _, outbound := range items {
+		protocol := strings.ToLower(strings.TrimSpace(urAsString(outbound["type"])))
+		switch protocol {
+		case "direct", "block", "dns", "selector", "urltest":
+			continue
+		}
+		out = append(out, parseSingBoxProxyNode(outbound))
+	}
+	if len(out) == 0 {
+		return []parsedProxyNode{{Err: "sing-box config contains no supported proxy outbounds"}}, true
+	}
+	return out, true
+}
+
+func singBoxOutboundItems(document any) []map[string]any {
+	toMaps := func(values []any) []map[string]any {
+		out := make([]map[string]any, 0, len(values))
+		for _, value := range values {
+			if item, ok := value.(map[string]any); ok {
+				out = append(out, item)
+			}
+		}
+		return out
+	}
+
+	switch value := document.(type) {
+	case []any:
+		return toMaps(value)
+	case map[string]any:
+		for _, key := range []string{"outbounds", "endpoints"} {
+			if items, ok := value[key].([]any); ok && len(items) > 0 {
+				return toMaps(items)
+			}
+		}
+		if strings.TrimSpace(urAsString(value["type"])) != "" {
+			return []map[string]any{value}
+		}
+	}
+	return nil
+}
+
+func parseSingBoxProxyNode(outbound map[string]any) parsedProxyNode {
+	clash := map[string]any{
+		"name":     urAsString(outbound["tag"]),
+		"type":     urAsString(outbound["type"]),
+		"server":   urAsString(outbound["server"]),
+		"port":     toInt(outbound["server_port"]),
+		"username": urAsString(outbound["username"]),
+		"password": urAsString(outbound["password"]),
+		"uuid":     urAsString(outbound["uuid"]),
+		"cipher":   urAsString(outbound["method"]),
+		"alterId":  toInt(outbound["alter_id"]),
+		"flow":     urAsString(outbound["flow"]),
+	}
+	protocol := strings.ToLower(strings.TrimSpace(urAsString(clash["type"])))
+	switch protocol {
+	case "socks":
+		clash["type"] = "socks5"
+	case "shadowsocks":
+		clash["type"] = "ss"
+	}
+
+	if transport, ok := outbound["transport"].(map[string]any); ok {
+		clash["network"] = urAsString(transport["type"])
+		clash["path"] = urAsString(transport["path"])
+		clash["ws-path"] = urAsString(transport["path"])
+		clash["service-name"] = urAsString(transport["service_name"])
+		clash["grpc-opts"] = map[string]any{"grpc-service-name": urAsString(transport["service_name"])}
+		if headers, ok := transport["headers"].(map[string]any); ok {
+			clash["host"] = urAsString(headers["Host"])
+			if clash["host"] == "" {
+				clash["host"] = urAsString(headers["host"])
+			}
+		}
+	}
+	if tls, ok := outbound["tls"].(map[string]any); ok && toBool(tls["enabled"]) {
+		clash["tls"] = true
+		clash["servername"] = urAsString(tls["server_name"])
+		clash["sni"] = urAsString(tls["server_name"])
+		clash["skip-cert-verify"] = toBool(tls["insecure"])
+		if reality, ok := tls["reality"].(map[string]any); ok && toBool(reality["enabled"]) {
+			clash["security"] = "reality"
+			clash["reality-opts"] = map[string]any{
+				"public-key": urAsString(reality["public_key"]),
+				"short-id":   urAsString(reality["short_id"]),
+			}
+		}
+		if protocol == "http" {
+			clash["type"] = "https"
+		}
+	}
+	return parseClashProxyNode(clash)
 }
 
 func decodeProxySubscriptionPayload(raw string) (string, bool) {

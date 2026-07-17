@@ -25,7 +25,7 @@ ARG NPM_CONFIG_REGISTRY
 WORKDIR /app/frontend
 
 # Keep the builder aligned with the lockfile generator.
-RUN corepack enable && corepack prepare pnpm@11.7.0 --activate
+RUN corepack enable && corepack prepare pnpm@9.15.9 --activate
 
 # Install dependencies first (better caching)
 COPY frontend/package.json frontend/pnpm-lock.yaml frontend/pnpm-workspace.yaml ./

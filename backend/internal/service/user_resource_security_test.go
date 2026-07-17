@@ -338,6 +338,29 @@ proxies:
 	}
 }
 
+func TestParseProxyNodeLinesSupportsSingBoxJSON(t *testing.T) {
+	raw := `{
+  "outbounds": [
+    {"type":"direct","tag":"direct"},
+    {"type":"socks","tag":"local socks","server":"socks.example.com","server_port":1080,"username":"user","password":"pass"},
+    {"type":"vless","tag":"vless reality","server":"vless.example.com","server_port":443,"uuid":"11111111-1111-1111-1111-111111111111","flow":"xtls-rprx-vision","transport":{"type":"grpc","service_name":"svc"},"tls":{"enabled":true,"server_name":"sni.example.com","reality":{"enabled":true,"public_key":"pub","short_id":"abc"}}}
+  ]
+}`
+	nodes := parseProxyNodeLines(raw)
+	if len(nodes) != 2 {
+		t.Fatalf("expected 2 supported sing-box nodes, got %#v", nodes)
+	}
+	if nodes[0].Name != "local socks" || nodes[0].Kind != "standard" || nodes[0].Protocol != "socks5" {
+		t.Fatalf("unexpected socks node: %#v", nodes[0])
+	}
+	if nodes[1].Name != "vless reality" || nodes[1].Kind != "xray" || nodes[1].Protocol != "vless" || nodes[1].Network != "grpc" {
+		t.Fatalf("unexpected vless node: %#v", nodes[1])
+	}
+	if _, err := buildXrayOutbound(nodes[1].Raw, &Proxy{Kind: "xray"}); err != nil {
+		t.Fatalf("sing-box vless node did not produce a valid xray outbound: %v", err)
+	}
+}
+
 func TestValidateExternalHTTPURLRejectsLocalAndMetadataTargets(t *testing.T) {
 	for _, raw := range []string{
 		"http://127.0.0.1:8080/sub",
