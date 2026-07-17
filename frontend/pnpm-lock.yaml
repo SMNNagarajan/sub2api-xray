@@ -68,6 +68,9 @@ importers:
       '@intlify/message-compiler':
         specifier: 9.14.5
         version: 9.14.5
+      '@types/dompurify':
+        specifier: ^3.0.5
+        version: 3.2.0
       '@types/file-saver':
         specifier: ^2.0.7
         version: 2.0.7
@@ -545,6 +548,10 @@ packages:
     resolution: {integrity: sha512-b5jPluAR6U3eOq6GWAYSpj3ugnAIZgGR0e6aGAgyRse0Yu6MVQQ0ZWm9SArSXWtageogn6bkVD8D//c4IjW3xQ==}
     peerDependencies:
       vue: ^2.7.0 || ^3.0.0
+
+  '@types/dompurify@3.2.0':
+    resolution: {integrity: sha512-Fgg31wv9QbLDA0SpTOXO3MaxySc4DKGLi8sna4/Utjo4r3ZRPdCt4UQee8BWr+Q5z21yifghREPJGYaEOEIACg==}
+    deprecated: This is a stub types definition. dompurify provides its own type definitions, so you do not need this installed.
 
   '@types/estree@1.0.8':
     resolution: {integrity: sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==}
@@ -2483,6 +2490,10 @@ snapshots:
     dependencies:
       '@tanstack/virtual-core': 3.13.23
       vue: 3.5.26(typescript@5.6.3)
+
+  '@types/dompurify@3.2.0':
+    dependencies:
+      dompurify: 3.4.11
 
   '@types/estree@1.0.8': {}
 
