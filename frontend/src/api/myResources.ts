@@ -1,5 +1,5 @@
 import { apiClient } from './client'
-import type { ProxyQualityCheckResult } from '@/types'
+import type { ClaudeModel, ProxyQualityCheckResult } from '@/types'
 
 export interface ResourcePage<T = Record<string, any>> {
   items: T[]
@@ -118,6 +118,7 @@ export const myResourcesApi = {
       exchange: async (payload: UserOAuthExchangePayload) => (await apiClient.post<UserOAuthCredentialsResult>('/my/accounts/oauth/exchange', payload)).data,
       cookie: async (payload: { proxy_id?: number; setup_token?: boolean; session_key: string }) => (await apiClient.post<UserOAuthCredentialsResult>('/my/accounts/oauth/cookie', payload)).data,
     },
+    getAvailableModels: async (id: number) => (await apiClient.get<ClaudeModel[]>(`/my/accounts/${id}/models`)).data,
     test: async (id: number) => (await apiClient.post(`/my/accounts/${id}/test`)).data,
     refresh: async (id: number) => (await apiClient.post<ResourceItem>(`/my/accounts/${id}/refresh`)).data,
     clearError: async (id: number) => (await apiClient.post<ResourceItem>(`/my/accounts/${id}/clear-error`)).data,

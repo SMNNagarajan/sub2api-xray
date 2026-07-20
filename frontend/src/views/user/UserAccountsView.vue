@@ -193,6 +193,12 @@
       @usage="openAccountUsage"
       @clear-error="clearAccountError"
     />
+    <AccountTestModal
+      scope="user"
+      :show="accountTestOpen"
+      :account="accountTestTarget"
+      @close="closeAccountTest"
+    />
 
     <BaseDialog :show="textDialogOpen" :title="textDialogTitle" width="wide" @close="closeTextDialog">
       <form id="user-account-text-dialog" class="space-y-3" @submit.prevent="submitTextDialog">
@@ -236,7 +242,7 @@ import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 
 import { myResourcesApi, type ResourceItem } from '@/api/myResources'
-import { CreateAccountModal, EditAccountModal } from '@/components/account'
+import { AccountTestModal, CreateAccountModal, EditAccountModal } from '@/components/account'
 import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'
 import AccountStatusIndicator from '@/components/account/AccountStatusIndicator.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
@@ -284,6 +290,8 @@ let timer: ReturnType<typeof setInterval> | undefined
 const showCreate = ref(false)
 const showEdit = ref(false)
 const editingAccount = ref<Account | null>(null)
+const accountTestOpen = ref(false)
+const accountTestTarget = ref<Account | null>(null)
 const deleteDialogOpen = ref(false)
 const deletingAccount = ref<ResourceItem | null>(null)
 const rowMenu = reactive<{ show: boolean; account: Account | null; position: { top: number; left: number } | null }>({ show: false, account: null, position: null })
@@ -423,14 +431,14 @@ function openRowMenu(row: ResourceItem, event: MouseEvent) {
   rowMenu.show = true
 }
 
-async function testAccount(account: Account | ResourceItem) {
-  try {
-    await myResourcesApi.accounts.test(Number(account.id))
-    appStore.showSuccess(mr('messages.testSuccess'))
-    await reload()
-  } catch (error) {
-    appStore.showError(extractApiErrorMessage(error, mr('messages.testFailed')))
-  }
+function testAccount(account: Account) {
+  accountTestTarget.value = account
+  accountTestOpen.value = true
+}
+
+function closeAccountTest() {
+  accountTestOpen.value = false
+  accountTestTarget.value = null
 }
 
 async function refreshAccount(account: Account | ResourceItem) {

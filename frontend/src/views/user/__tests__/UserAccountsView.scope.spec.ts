@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const source = readFileSync(resolve(process.cwd(), 'src/views/user/UserAccountsView.vue'), 'utf8')
+const accountTestModalSource = readFileSync(resolve(process.cwd(), 'src/components/account/AccountTestModal.vue'), 'utf8')
 
 describe('UserAccountsView user scope and admin-equivalent experience', () => {
   it('uses the account management table experience without admin APIs', () => {
@@ -19,8 +20,17 @@ describe('UserAccountsView user scope and admin-equivalent experience', () => {
   it('reuses the original account dialogs in user scope', () => {
     expect(source).toContain('<CreateAccountModal')
     expect(source).toContain('<EditAccountModal')
-    expect(source.match(/scope="user"/g)).toHaveLength(2)
+    expect(source).toContain('<AccountTestModal')
+    expect(source.match(/scope="user"/g)).toHaveLength(3)
     expect(source).toContain('<BaseDialog')
+  })
+
+  it('opens the original test dialog from the row action without admin endpoints', () => {
+    expect(source).toContain('@test="testAccount"')
+    expect(source).toContain('accountTestTarget.value = account')
+    expect(source).toContain('accountTestOpen.value = true')
+    expect(accountTestModalSource).toContain('myResourcesApi.accounts.getAvailableModels')
+    expect(accountTestModalSource).toContain("`/my/accounts/${props.account.id}/test/stream`")
   })
 
   it('keeps account filters full width on mobile', () => {
@@ -29,7 +39,7 @@ describe('UserAccountsView user scope and admin-equivalent experience', () => {
   })
 
   it('supports the expected user account data and batch operations', () => {
-    for (const operation of ['export', 'import', 'importCodexSessions', 'importCodexPAT', 'batchUpdate', 'test', 'refresh', 'clearError', 'setSchedulable']) {
+    for (const operation of ['export', 'import', 'importCodexSessions', 'importCodexPAT', 'batchUpdate', 'refresh', 'clearError', 'setSchedulable']) {
       expect(source).toContain(`myResourcesApi.accounts.${operation}`)
     }
   })

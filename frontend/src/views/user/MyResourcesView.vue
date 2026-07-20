@@ -82,22 +82,51 @@
               <Icon name="shield" size="md" class="mr-2" :class="batchQualityChecking ? 'animate-pulse' : ''" />
               <span>{{ batchQualityChecking ? mr('actions.batchProgress', { completed: proxyBatchProgress.completed, total: proxyBatchProgress.total }) : mr('actions.batchQuality') }}</span>
             </button>
-            <button
-              v-if="resource === 'proxies'"
-              class="btn btn-danger"
-              :disabled="selectedIds.length === 0 || loading"
-              :title="t('admin.proxies.batchDeleteAction')"
-              @click="batchDeleteProxies"
-            >
-              <Icon name="trash" size="md" class="mr-2" />
-              {{ t('admin.proxies.batchDeleteAction') }}
-            </button>
-            <div class="relative">
-              <button class="btn btn-secondary" type="button" :title="mr('actions.columns')" @click="showColumnSettings = !showColumnSettings">
-                <Icon name="grid" size="md" class="mr-2" />
-                <span class="hidden md:inline">{{ mr('actions.columns') }}</span>
+            <div ref="columnSettingsRef" class="relative">
+              <button
+                class="btn btn-secondary"
+                :class="resource === 'proxies' ? 'px-2' : ''"
+                type="button"
+                :title="resource === 'proxies' ? t('admin.accounts.moreActions') : mr('actions.columns')"
+                :aria-label="resource === 'proxies' ? t('admin.accounts.moreActions') : mr('actions.columns')"
+                @click="showColumnSettings = !showColumnSettings"
+              >
+                <Icon :name="resource === 'proxies' ? 'more' : 'grid'" size="md" :class="resource === 'proxies' ? '' : 'mr-2'" />
+                <span v-if="resource !== 'proxies'" class="hidden md:inline">{{ mr('actions.columns') }}</span>
               </button>
-              <div v-if="showColumnSettings" class="absolute right-0 top-full z-50 mt-1 max-h-80 w-48 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-dark-600 dark:bg-dark-800">
+              <div
+                v-if="showColumnSettings && resource === 'proxies'"
+                class="absolute right-0 top-full z-50 mt-1 w-64 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-600 dark:bg-dark-800"
+              >
+                <div class="p-2">
+                  <button
+                    type="button"
+                    class="flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700"
+                    @click="showColumnSettings = false; openProxySources()"
+                  >
+                    <Icon name="link" size="sm" class="text-primary-500" />
+                    <span>{{ mr('actions.sources') }}</span>
+                  </button>
+                  <div class="my-2 border-t border-gray-100 dark:border-dark-700"></div>
+                  <div class="flex items-center justify-between px-3 py-2 text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                    <span>{{ mr('actions.visibleColumns') }}</span>
+                    <Icon name="grid" size="sm" />
+                  </div>
+                  <div class="max-h-64 overflow-y-auto">
+                    <button
+                      v-for="column in toggleableAlignedColumns"
+                      :key="column.key"
+                      type="button"
+                      class="flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700"
+                      @click="toggleColumn(column.key)"
+                    >
+                      <span class="truncate">{{ column.label }}</span>
+                      <Icon v-if="isColumnVisible(column.key)" name="check" size="sm" class="text-primary-500" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div v-else-if="showColumnSettings" class="absolute right-0 top-full z-50 mt-1 max-h-80 w-48 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-dark-600 dark:bg-dark-800">
                 <button
                   v-for="column in toggleableAlignedColumns"
                   :key="column.key"
@@ -110,17 +139,21 @@
                 </button>
               </div>
             </div>
+            <button
+              v-if="resource === 'proxies'"
+              class="btn btn-danger"
+              :disabled="selectedIds.length === 0 || loading"
+              :title="t('admin.proxies.batchDeleteAction')"
+              @click="batchDeleteProxies"
+            >
+              <Icon name="trash" size="md" class="mr-2" />
+              {{ t('admin.proxies.batchDeleteAction') }}
+            </button>
             <button v-if="resource === 'proxies'" class="btn btn-secondary" :title="mr('actions.importNodes')" :aria-label="mr('actions.importNodes')" @click="openProxyImport">
-              <Icon name="upload" size="sm" class="mr-2" />
               {{ t('admin.proxies.dataImport') }}
             </button>
             <button v-if="resource === 'proxies'" class="btn btn-secondary" :title="mr('actions.export')" :aria-label="mr('actions.export')" @click="exportProxies">
-              <Icon name="download" size="sm" class="mr-2" />
               {{ selectedIds.length ? t('admin.proxies.dataExportSelected') : t('admin.proxies.dataExport') }}
-            </button>
-            <button v-if="resource === 'proxies'" class="btn btn-secondary" :title="mr('actions.sources')" :aria-label="mr('actions.sources')" @click="openProxySources">
-              <Icon name="link" size="sm" class="mr-2" />
-              {{ mr('actions.sources') }}
             </button>
             <button v-if="resource === 'assigned-subscriptions'" class="btn btn-secondary" @click="openBulkAssign">
               {{ mr('actions.bulkAssign') }}
@@ -154,7 +187,7 @@
       </template>
 
       <template #table>
-        <div class="space-y-4">
+        <div :class="resource === 'proxies' ? 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden' : 'flex min-h-0 min-w-0 flex-1 flex-col space-y-4'">
           <div v-if="resource === 'redeem-codes' && redeemStats" class="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
             <div class="rounded-md border border-gray-200 p-3 dark:border-dark-700"><div class="text-xs text-gray-500">{{ mr('stats.total') }}</div><div class="mt-1 text-xl font-semibold">{{ redeemStats.total_codes || 0 }}</div></div>
             <div class="rounded-md border border-gray-200 p-3 dark:border-dark-700"><div class="text-xs text-gray-500">{{ mr('stats.active') }}</div><div class="mt-1 text-xl font-semibold text-emerald-600">{{ redeemStats.active_codes || 0 }}</div></div>
@@ -216,6 +249,9 @@
               <div v-if="row.rate_limited_account_count"><span class="text-gray-500">{{ mr('table.rateLimited') }}</span><span class="ml-1 font-medium text-amber-600">{{ row.rate_limited_account_count }}</span></div>
               <div><span class="text-gray-500">{{ mr('table.total') }}</span><span class="ml-1 font-medium text-gray-700 dark:text-gray-300">{{ row.account_count || 0 }}</span></div>
             </div>
+            <span v-else-if="resource === 'proxies'" class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-800 dark:bg-dark-600 dark:text-gray-300">
+              {{ t('admin.groups.accountsCount', { count: Number(value || 0) }) }}
+            </span>
             <span v-else class="inline-flex items-center rounded bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-800 dark:bg-dark-600 dark:text-gray-300">{{ mr('table.countValue', { count: Number(value || 0) }) }}</span>
           </template>
           <template v-if="resource === 'groups'" #cell-capacity="{ row }">
@@ -271,7 +307,7 @@
               </span>
               <span v-else class="text-sm text-gray-400">-</span>
               <div v-if="typeof row.quality_checked === 'number'" class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400" :title="row.quality_summary || undefined">
-                <span>{{ mr('table.qualityInline', { grade: row.quality_grade || '-', score: row.quality_score ?? '-' }) }}</span>
+                <span>{{ t('admin.proxies.qualityInline', { grade: row.quality_grade || '-', score: row.quality_score ?? '-' }) }}</span>
                 <span class="badge" :class="proxyQualityClass(row.quality_status)">{{ proxyQualityLabel(row.quality_status) }}</span>
               </div>
             </div>
@@ -1274,18 +1310,18 @@ const configs = computed<Record<ResourceKind, PageConfig>>(() => ({
     createLabel: mr('pages.proxies.create'),
     defaultPayload: { name: '', kind: 'standard', protocol: 'socks5', host: '', port: 1080, status: 'active' },
     columns: [
-      { key: 'name', label: mr('columns.name'), class: 'min-w-40' },
-      { key: 'visibility', label: mr('columns.visibility'), class: 'min-w-24' },
-      { key: 'kind', label: mr('columns.proxyMode'), badge: true, class: 'min-w-28' },
-      { key: 'protocol', label: mr('columns.protocol'), class: 'min-w-28' },
-      { key: 'address', label: mr('columns.address'), class: 'min-w-44' },
-      { key: 'auth', label: mr('columns.auth'), class: 'min-w-32' },
-      { key: 'location', label: mr('columns.location'), class: 'min-w-40' },
-      { key: 'account_count', label: mr('columns.accountCount'), class: 'min-w-24' },
-      { key: 'latency', label: mr('columns.latency'), class: 'min-w-40' },
-      { key: 'expiry', label: mr('columns.expiry'), class: 'min-w-36' },
-      { key: 'created_at', label: mr('columns.createdAt'), class: 'min-w-36' },
-      { key: 'status', label: mr('columns.status'), badge: true, class: 'min-w-24' },
+      { key: 'name', label: mr('columns.name') },
+      { key: 'visibility', label: mr('columns.visibility') },
+      { key: 'kind', label: mr('columns.proxyMode'), badge: true },
+      { key: 'protocol', label: mr('columns.protocol') },
+      { key: 'address', label: mr('columns.address') },
+      { key: 'auth', label: mr('columns.auth') },
+      { key: 'location', label: mr('columns.location') },
+      { key: 'account_count', label: mr('columns.accountCount') },
+      { key: 'latency', label: mr('columns.latency') },
+      { key: 'expiry', label: mr('columns.expiry') },
+      { key: 'created_at', label: mr('columns.createdAt') },
+      { key: 'status', label: mr('columns.status'), badge: true },
     ],
   },
   'assigned-subscriptions': {
@@ -1444,6 +1480,7 @@ const hasActiveFilters = computed(() => Object.values(filters).some(value => Str
 const referenceLoading = ref(false)
 const hiddenColumns = ref<Set<string>>(new Set())
 const showColumnSettings = ref(false)
+const columnSettingsRef = ref<HTMLElement | null>(null)
 const editorOpen = ref(false)
 const editorText = ref('')
 const editorError = ref('')
@@ -1698,14 +1735,14 @@ const alignedColumns = computed<Column[]>(() => {
   if (selectableResource.value) {
     columns.unshift({ key: 'select', label: '', sortable: false, class: undefined })
   }
-  columns.push({ key: 'actions', label: mr('table.actions'), sortable: false, class: resource.value === 'proxies' ? 'min-w-64' : undefined })
+  columns.push({ key: 'actions', label: mr('table.actions'), sortable: false, class: undefined })
   return columns
 })
 const accountOAuthEnabled = computed(() => resource.value === 'accounts' && ['oauth', 'setup-token'].includes(editorForm.account.type))
 const accountOAuthSetupToken = computed(() => editorForm.account.type === 'setup-token')
 
 function formatProxyLocation(item: ResourceItem): string {
-  return [item.country, item.city].filter(Boolean).join(' / ')
+  return [item.country, item.city].filter(Boolean).join(' · ')
 }
 
 function countryFlag(value: unknown): string {
@@ -1828,6 +1865,13 @@ function toggleColumn(key: string): void {
   }
   hiddenColumns.value = next
   saveColumnSettings()
+}
+
+function closeColumnSettingsOnOutsideClick(event: MouseEvent): void {
+  const target = event.target as Node | null
+  if (target && columnSettingsRef.value && !columnSettingsRef.value.contains(target)) {
+    showColumnSettings.value = false
+  }
 }
 
 function populateEditorForm(payload: ResourceItem): void {
@@ -3392,10 +3436,12 @@ watch(() => editorForm.account.type, () => {
 onMounted(() => {
   applyAccountFilterFromRoute()
   loadColumnSettings()
+  document.addEventListener('click', closeColumnSettingsOnOutsideClick)
   void loadData()
 })
 
 onUnmounted(() => {
   if (alignedSearchTimer) clearTimeout(alignedSearchTimer)
+  document.removeEventListener('click', closeColumnSettingsOnOutsideClick)
 })
 </script>

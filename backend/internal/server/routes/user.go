@@ -158,6 +158,8 @@ func RegisterUserRoutes(
 				accounts.POST("/oauth/auth-url", h.MyResources.GenerateAccountOAuthURL)
 				accounts.POST("/oauth/exchange", h.MyResources.ExchangeAccountOAuthCode)
 				accounts.POST("/oauth/cookie", h.MyResources.ExchangeAccountOAuthCookie)
+				accounts.GET("/:id/models", h.MyResources.GetAccountTestModels)
+				accounts.POST("/:id/test/stream", h.MyResources.StreamAccountTest)
 				accounts.GET("/:id", h.MyResources.GetAccount)
 				accounts.PUT("/:id", h.MyResources.UpdateAccount)
 				accounts.DELETE("/:id", h.MyResources.DeleteAccount)

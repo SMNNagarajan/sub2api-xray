@@ -22,6 +22,8 @@ describe('MyResourcesView responsive localization', () => {
     expect(source).toContain('<TablePageLayout>')
     expect(source).toContain('<DataTable')
     expect(source).toContain(':columns="alignedColumns"')
+    expect(source).toContain("resource === 'proxies' ? 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'")
+    expect(source).toContain("'flex min-h-0 min-w-0 flex-1 flex-col space-y-4'")
     expect(source).not.toContain('adminAlignedResource')
     expect(source).not.toContain('<div v-else class="space-y-4">')
     for (const resource of ['groups', 'accounts', 'proxies', 'assigned-subscriptions', 'redeem-codes', 'account-logs', 'upstream-errors']) {
@@ -35,8 +37,11 @@ describe('MyResourcesView responsive localization', () => {
     expect(source).toContain("mr('actions.userRates')")
     expect(source).toContain('max-w-[70%] break-all text-xs sm:max-w-none sm:whitespace-nowrap sm:break-normal')
     expect(source).toContain("mr('states.publicDetailsHidden')")
-    expect(source).toContain("class: 'min-w-44'")
+    expect(source).not.toContain("class: 'min-w-44'")
+    expect(source).not.toContain("resource.value === 'proxies' ? 'min-w-64'")
     expect(source).not.toContain('class="code whitespace-nowrap text-xs"')
+    expect(source).toContain("t('admin.groups.accountsCount', { count: Number(value || 0) })")
+    expect(source).toContain("t('admin.proxies.qualityInline'")
 
     const testAction = source.indexOf("mr('actions.testConnection')")
     const qualityAction = source.indexOf("mr('actions.quality')")
@@ -59,6 +64,16 @@ describe('MyResourcesView responsive localization', () => {
     for (const text of ['>Columns<', '>Export<', '>Import<', '>Test<', '>Refresh<', '>Sources<', '>Stats<']) {
       expect(source).not.toContain(text)
     }
+  })
+
+  it('keeps proxy-only secondary tools in a compact menu aligned with IP management', () => {
+    expect(source).toContain(":title=\"resource === 'proxies' ? t('admin.accounts.moreActions') : mr('actions.columns')\"")
+    expect(source).toContain("<Icon :name=\"resource === 'proxies' ? 'more' : 'grid'\"")
+    expect(source).toContain("@click=\"showColumnSettings = false; openProxySources()\"")
+    expect(source).toContain("mr('actions.visibleColumns')")
+    expect(source).not.toContain("class=\"btn btn-secondary\" :title=\"mr('actions.sources')\"")
+    expect(source).toContain("document.addEventListener('click', closeColumnSettingsOnOutsideClick)")
+    expect(source).toContain("document.removeEventListener('click', closeColumnSettingsOnOutsideClick)")
   })
 
   it('uses project Select controls and proxy-specific filters', () => {

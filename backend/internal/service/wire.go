@@ -82,8 +82,11 @@ func ProvideUserResourceService(
 	userGroupRateRepo UserGroupRateRepository,
 	proxyProber ProxyExitInfoProber,
 	proxyLatencyCache ProxyLatencyCache,
+	accountTestService *AccountTestService,
+	tokenRefreshService *TokenRefreshService,
 ) *UserResourceService {
 	svc := NewUserResourceService(db, subscriptionService, billingCacheService, authCacheInvalidator)
+	svc.SetAccountMaintenanceServices(accountTestService, tokenRefreshService)
 	svc.SetOAuthServices(oauthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService)
 	svc.SetGroupSupportServices(dashboardService, groupCapacityService, userGroupRateRepo)
 	svc.SetProxyObservabilityServices(proxyProber, proxyLatencyCache)

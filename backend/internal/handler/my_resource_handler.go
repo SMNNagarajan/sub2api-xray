@@ -809,6 +809,46 @@ func (h *MyResourceHandler) TestAccount(c *gin.Context) {
 	response.Success(c, result)
 }
 
+func (h *MyResourceHandler) GetAccountTestModels(c *gin.Context) {
+	userID, ok := h.currentUser(c)
+	if !ok {
+		return
+	}
+	id, ok := parseInt64Param(c, "id")
+	if !ok {
+		return
+	}
+	models, err := h.userResourceService.GetAccountTestModels(c.Request.Context(), userID, id)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, models)
+}
+
+func (h *MyResourceHandler) StreamAccountTest(c *gin.Context) {
+	userID, ok := h.currentUser(c)
+	if !ok {
+		return
+	}
+	id, ok := parseInt64Param(c, "id")
+	if !ok {
+		return
+	}
+	var req struct {
+		ModelID string `json:"model_id"`
+		Prompt  string `json:"prompt"`
+		Mode    string `json:"mode"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil && c.Request.ContentLength != 0 {
+		response.BadRequest(c, "Invalid test request")
+		return
+	}
+	if err := h.userResourceService.StreamAccountTest(c, userID, id, req.ModelID, req.Prompt, req.Mode); err != nil && !c.Writer.Written() {
+		response.ErrorFrom(c, err)
+	}
+}
+
 func (h *MyResourceHandler) RefreshAccount(c *gin.Context) {
 	userID, ok := h.currentUser(c)
 	if !ok {

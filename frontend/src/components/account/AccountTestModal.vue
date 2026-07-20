@@ -9,16 +9,16 @@
       <!-- Account Info Card -->
       <div
         v-if="account"
-        class="flex items-center justify-between rounded-xl border border-gray-200 bg-gradient-to-r from-gray-50 to-gray-100 p-3 dark:border-dark-500 dark:from-dark-700 dark:to-dark-600"
+        class="flex items-center justify-between gap-3 rounded-xl border border-gray-200 bg-gradient-to-r from-gray-50 to-gray-100 p-3 dark:border-dark-500 dark:from-dark-700 dark:to-dark-600"
       >
-        <div class="flex items-center gap-3">
+        <div class="flex min-w-0 items-center gap-3">
           <div
             class="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-br from-primary-500 to-primary-600"
           >
             <Icon name="play" size="md" class="text-white" :stroke-width="2" />
           </div>
-          <div>
-            <div class="font-semibold text-gray-900 dark:text-gray-100">{{ account.name }}</div>
+          <div class="min-w-0">
+            <div class="truncate font-semibold text-gray-900 dark:text-gray-100" :title="account.name">{{ account.name }}</div>
             <div class="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400">
               <span
                 class="rounded bg-gray-200 px-1.5 py-0.5 text-[10px] font-medium uppercase dark:bg-dark-500"
@@ -31,7 +31,7 @@
         </div>
         <span
           :class="[
-            'rounded-full px-2.5 py-1 text-xs font-semibold',
+            'shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold',
             account.status === 'active'
               ? 'bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-400'
               : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
@@ -66,14 +66,15 @@
         />
       </div>
 
-      <div v-if="supportsImageTest" class="space-y-1.5">
+      <div v-if="testMode !== 'compact'" class="space-y-1.5">
         <TextArea
+          id="account-test-prompt"
           v-model="testPrompt"
-          :label="t('admin.accounts.imagePromptLabel')"
-          :placeholder="t('admin.accounts.imagePromptPlaceholder')"
-          :hint="t('admin.accounts.imageTestHint')"
+          :label="supportsImageTest ? t('admin.accounts.imagePromptLabel') : t('admin.accounts.testPromptLabel')"
+          :placeholder="supportsImageTest ? t('admin.accounts.imagePromptPlaceholder') : t('admin.accounts.testPromptPlaceholder')"
+          :hint="supportsImageTest ? t('admin.accounts.imageTestHint') : undefined"
           :disabled="status === 'connecting'"
-          rows="3"
+          :rows="supportsImageTest ? 3 : 2"
         />
       </div>
 
@@ -184,13 +185,20 @@
             {{ t('admin.accounts.testModel') }}
           </span>
         </div>
-        <span class="flex items-center gap-1">
+        <span class="flex min-w-0 max-w-[65%] items-center gap-1">
           <Icon name="chat" size="sm" :stroke-width="2" />
-          {{
-            supportsImageTest
-              ? t('admin.accounts.imageTestMode')
-              : t('admin.accounts.testPrompt')
-          }}
+          <span
+            class="truncate"
+            :title="testMode === 'compact' ? t('admin.accounts.openai.testModeCompact') : effectiveTestPrompt"
+          >
+            {{
+              testMode === 'compact'
+                ? t('admin.accounts.openai.testModeCompact')
+                : supportsImageTest
+                  ? t('admin.accounts.imageTestMode')
+                  : t('admin.accounts.testPrompt', { prompt: effectiveTestPrompt })
+            }}
+          </span>
         </span>
       </div>
     </div>
@@ -251,6 +259,8 @@ import { Icon } from '@/components/icons'
 import { useClipboard } from '@/composables/useClipboard'
 import { buildApiUrl } from '@/api/client'
 import { adminAPI } from '@/api/admin'
+import { myResourcesApi } from '@/api/myResources'
+import { ADMIN_UI_REQUEST_HEADER } from '@/api/adminUIRequest'
 import type { Account, ClaudeModel } from '@/types'
 
 const { t } = useI18n()
@@ -266,10 +276,13 @@ interface PreviewImage {
   mimeType?: string
 }
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   show: boolean
   account: Account | null
-}>()
+  scope?: 'admin' | 'user'
+}>(), {
+  scope: 'admin'
+})
 
 const emit = defineEmits<{
   (e: 'close'): void
@@ -325,7 +338,7 @@ watch(
   () => props.show,
   async (newVal) => {
     if (newVal && props.account) {
-      testPrompt.value = ''
+      testPrompt.value = 'hi'
       testMode.value = 'default'
       resetState()
       await loadAvailableModels()
@@ -335,10 +348,22 @@ watch(
   }
 )
 
-watch(selectedModelId, () => {
-  if (supportsImageTest.value && !testPrompt.value.trim()) {
-    testPrompt.value = t('admin.accounts.imagePromptDefault')
+watch(supportsImageTest, (supportsImage, previouslySupportedImage) => {
+  const currentPrompt = testPrompt.value.trim()
+  const imageDefault = t('admin.accounts.imagePromptDefault')
+  if (supportsImage && (!currentPrompt || (!previouslySupportedImage && currentPrompt === 'hi'))) {
+    testPrompt.value = imageDefault
+    return
   }
+  if (!supportsImage && (!currentPrompt || (previouslySupportedImage && currentPrompt === imageDefault))) {
+    testPrompt.value = 'hi'
+  }
+})
+
+const effectiveTestPrompt = computed(() => {
+  const prompt = testPrompt.value.trim()
+  if (prompt) return prompt
+  return supportsImageTest.value ? t('admin.accounts.imagePromptDefault') : 'hi'
 })
 
 const loadAvailableModels = async () => {
@@ -347,7 +372,9 @@ const loadAvailableModels = async () => {
   loadingModels.value = true
   selectedModelId.value = '' // Reset selection before loading
   try {
-    const models = await adminAPI.accounts.getAvailableModels(props.account.id)
+    const models = props.scope === 'user'
+      ? await myResourcesApi.accounts.getAvailableModels(props.account.id)
+      : await adminAPI.accounts.getAvailableModels(props.account.id)
     availableModels.value = props.account.platform === 'gemini' || props.account.platform === 'antigravity'
       ? sortTestModels(models)
       : models
@@ -419,18 +446,25 @@ const startTest = async () => {
 
   try {
     // Use the configured API base; EventSource does not support POST.
-    const url = buildApiUrl(`/admin/accounts/${props.account.id}/test`)
+    const path = props.scope === 'user'
+      ? `/my/accounts/${props.account.id}/test/stream`
+      : `/admin/accounts/${props.account.id}/test`
+    const url = buildApiUrl(path)
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
+      'Content-Type': 'application/json'
+    }
+    if (props.scope === 'admin') {
+      headers[ADMIN_UI_REQUEST_HEADER] = '1'
+    }
 
     // Use fetch with streaming for SSE since EventSource doesn't support POST
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${localStorage.getItem('auth_token')}`,
-        'Content-Type': 'application/json'
-      },
+      headers,
       body: JSON.stringify({
         model_id: selectedModelId.value,
-        prompt: supportsImageTest.value ? testPrompt.value.trim() : '',
+        prompt: testMode.value === 'compact' ? '' : effectiveTestPrompt.value,
         mode: isOpenAIAccount.value ? testMode.value : 'default'
       }),
       signal: abortController.signal
@@ -500,7 +534,7 @@ const handleEvent = (event: {
       addLine(
         supportsImageTest.value
             ? t('admin.accounts.sendingImageRequest')
-            : t('admin.accounts.sendingTestMessage'),
+            : t('admin.accounts.sendingTestMessage', { prompt: effectiveTestPrompt.value }),
         'text-gray-400'
       )
       addLine('', 'text-gray-300')
