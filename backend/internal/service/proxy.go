@@ -47,6 +47,13 @@ func (p *Proxy) IsExpired(now time.Time) bool {
 
 func (p *Proxy) URL() string {
 	if strings.EqualFold(p.Kind, "xray") {
+		if requiresSingBoxRuntime(p) {
+			resolved, err := DefaultSingBoxRuntimeManager().ProxyURL(context.Background(), p)
+			if err == nil && resolved != "" {
+				return resolved
+			}
+			return "sing-box://unavailable/" + strconv.FormatInt(p.ID, 10)
+		}
 		resolved, err := DefaultXrayRuntimeManager().ProxyURL(context.Background(), p)
 		if err == nil && resolved != "" {
 			return resolved

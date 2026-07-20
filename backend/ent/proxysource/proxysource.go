@@ -26,6 +26,8 @@ const (
 	FieldName = "name"
 	// FieldSubscriptionURL holds the string denoting the subscription_url field in the database.
 	FieldSubscriptionURL = "subscription_url"
+	// FieldIsPublic holds the string denoting the is_public field in the database.
+	FieldIsPublic = "is_public"
 	// FieldRefreshIntervalMinutes holds the string denoting the refresh_interval_minutes field in the database.
 	FieldRefreshIntervalMinutes = "refresh_interval_minutes"
 	// FieldLastSyncedAt holds the string denoting the last_synced_at field in the database.
@@ -49,6 +51,7 @@ var Columns = []string{
 	FieldOwnerUserID,
 	FieldName,
 	FieldSubscriptionURL,
+	FieldIsPublic,
 	FieldRefreshIntervalMinutes,
 	FieldLastSyncedAt,
 	FieldLastSyncStatus,
@@ -84,6 +87,8 @@ var (
 	NameValidator func(string) error
 	// SubscriptionURLValidator is a validator for the "subscription_url" field. It is called by the builders before save.
 	SubscriptionURLValidator func(string) error
+	// DefaultIsPublic holds the default value on creation for the "is_public" field.
+	DefaultIsPublic bool
 	// DefaultRefreshIntervalMinutes holds the default value on creation for the "refresh_interval_minutes" field.
 	DefaultRefreshIntervalMinutes int
 	// DefaultLastSyncStatus holds the default value on creation for the "last_sync_status" field.
@@ -130,6 +135,11 @@ func ByName(opts ...sql.OrderTermOption) OrderOption {
 // BySubscriptionURL orders the results by the subscription_url field.
 func BySubscriptionURL(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldSubscriptionURL, opts...).ToFunc()
+}
+
+// ByIsPublic orders the results by the is_public field.
+func ByIsPublic(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldIsPublic, opts...).ToFunc()
 }
 
 // ByRefreshIntervalMinutes orders the results by the refresh_interval_minutes field.

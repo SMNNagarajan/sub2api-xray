@@ -36643,6 +36643,7 @@ type ProxySourceMutation struct {
 	addowner_user_id            *int64
 	name                        *string
 	subscription_url            *string
+	is_public                   *bool
 	refresh_interval_minutes    *int
 	addrefresh_interval_minutes *int
 	last_synced_at              *time.Time
@@ -37003,6 +37004,42 @@ func (m *ProxySourceMutation) ResetSubscriptionURL() {
 	m.subscription_url = nil
 }
 
+// SetIsPublic sets the "is_public" field.
+func (m *ProxySourceMutation) SetIsPublic(b bool) {
+	m.is_public = &b
+}
+
+// IsPublic returns the value of the "is_public" field in the mutation.
+func (m *ProxySourceMutation) IsPublic() (r bool, exists bool) {
+	v := m.is_public
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldIsPublic returns the old "is_public" field's value of the ProxySource entity.
+// If the ProxySource object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *ProxySourceMutation) OldIsPublic(ctx context.Context) (v bool, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldIsPublic is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldIsPublic requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldIsPublic: %w", err)
+	}
+	return oldValue.IsPublic, nil
+}
+
+// ResetIsPublic resets all changes to the "is_public" field.
+func (m *ProxySourceMutation) ResetIsPublic() {
+	m.is_public = nil
+}
+
 // SetRefreshIntervalMinutes sets the "refresh_interval_minutes" field.
 func (m *ProxySourceMutation) SetRefreshIntervalMinutes(i int) {
 	m.refresh_interval_minutes = &i
@@ -37283,7 +37320,7 @@ func (m *ProxySourceMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *ProxySourceMutation) Fields() []string {
-	fields := make([]string, 0, 11)
+	fields := make([]string, 0, 12)
 	if m.created_at != nil {
 		fields = append(fields, proxysource.FieldCreatedAt)
 	}
@@ -37301,6 +37338,9 @@ func (m *ProxySourceMutation) Fields() []string {
 	}
 	if m.subscription_url != nil {
 		fields = append(fields, proxysource.FieldSubscriptionURL)
+	}
+	if m.is_public != nil {
+		fields = append(fields, proxysource.FieldIsPublic)
 	}
 	if m.refresh_interval_minutes != nil {
 		fields = append(fields, proxysource.FieldRefreshIntervalMinutes)
@@ -37337,6 +37377,8 @@ func (m *ProxySourceMutation) Field(name string) (ent.Value, bool) {
 		return m.Name()
 	case proxysource.FieldSubscriptionURL:
 		return m.SubscriptionURL()
+	case proxysource.FieldIsPublic:
+		return m.IsPublic()
 	case proxysource.FieldRefreshIntervalMinutes:
 		return m.RefreshIntervalMinutes()
 	case proxysource.FieldLastSyncedAt:
@@ -37368,6 +37410,8 @@ func (m *ProxySourceMutation) OldField(ctx context.Context, name string) (ent.Va
 		return m.OldName(ctx)
 	case proxysource.FieldSubscriptionURL:
 		return m.OldSubscriptionURL(ctx)
+	case proxysource.FieldIsPublic:
+		return m.OldIsPublic(ctx)
 	case proxysource.FieldRefreshIntervalMinutes:
 		return m.OldRefreshIntervalMinutes(ctx)
 	case proxysource.FieldLastSyncedAt:
@@ -37428,6 +37472,13 @@ func (m *ProxySourceMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetSubscriptionURL(v)
+		return nil
+	case proxysource.FieldIsPublic:
+		v, ok := value.(bool)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetIsPublic(v)
 		return nil
 	case proxysource.FieldRefreshIntervalMinutes:
 		v, ok := value.(int)
@@ -37590,6 +37641,9 @@ func (m *ProxySourceMutation) ResetField(name string) error {
 		return nil
 	case proxysource.FieldSubscriptionURL:
 		m.ResetSubscriptionURL()
+		return nil
+	case proxysource.FieldIsPublic:
+		m.ResetIsPublic()
 		return nil
 	case proxysource.FieldRefreshIntervalMinutes:
 		m.ResetRefreshIntervalMinutes()

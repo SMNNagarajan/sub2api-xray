@@ -1084,7 +1084,13 @@ const protocolOptions = computed(() => [
   { value: 'vmess', label: 'VMess' },
   { value: 'vless', label: 'VLESS' },
   { value: 'trojan', label: 'Trojan' },
-  { value: 'ss', label: 'Shadowsocks' }
+  { value: 'ss', label: 'Shadowsocks' },
+  { value: 'hysteria', label: 'Hysteria' },
+  { value: 'hysteria2', label: 'Hysteria2' },
+  { value: 'tuic', label: 'TUIC' },
+  { value: 'anytls', label: 'AnyTLS' },
+  { value: 'naive', label: 'Naive' },
+  { value: 'wireguard', label: 'WireGuard' }
 ])
 
 const statusOptions = computed(() => [
@@ -1112,6 +1118,12 @@ const xrayProtocolSelectOptions = computed(() => [
   { value: 'vless', label: 'VLESS' },
   { value: 'trojan', label: 'Trojan' },
   { value: 'ss', label: 'Shadowsocks' },
+  { value: 'hysteria', label: 'Hysteria' },
+  { value: 'hysteria2', label: 'Hysteria2' },
+  { value: 'tuic', label: 'TUIC' },
+  { value: 'anytls', label: 'AnyTLS' },
+  { value: 'naive', label: 'Naive' },
+  { value: 'wireguard', label: 'WireGuard' },
 ])
 const proxyKindOptions = computed(() => [
   { value: 'standard', label: t('admin.proxies.standardProxy') },

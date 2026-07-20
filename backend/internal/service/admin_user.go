@@ -520,6 +520,9 @@ func (s *adminServiceImpl) finalizeUserOwnedResourceDeprovision(ctx context.Cont
 		if err := DefaultXrayRuntimeManager().Stop(proxyID); err != nil {
 			logger.LegacyPrintf("service.admin", "stop disabled user-owned xray proxy failed: user_id=%d proxy_id=%d err=%v", userID, proxyID, err)
 		}
+		if err := DefaultSingBoxRuntimeManager().Stop(proxyID); err != nil {
+			logger.LegacyPrintf("service.admin", "stop disabled user-owned sing-box proxy failed: user_id=%d proxy_id=%d err=%v", userID, proxyID, err)
+		}
 	}
 	if s.db != nil && (len(result.accountIDs) > 0 || len(result.groupIDs) > 0) {
 		_, err := s.db.ExecContext(ctx, `

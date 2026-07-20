@@ -103,6 +103,20 @@ func (_u *ProxySourceUpdate) SetNillableSubscriptionURL(v *string) *ProxySourceU
 	return _u
 }
 
+// SetIsPublic sets the "is_public" field.
+func (_u *ProxySourceUpdate) SetIsPublic(v bool) *ProxySourceUpdate {
+	_u.mutation.SetIsPublic(v)
+	return _u
+}
+
+// SetNillableIsPublic sets the "is_public" field if the given value is not nil.
+func (_u *ProxySourceUpdate) SetNillableIsPublic(v *bool) *ProxySourceUpdate {
+	if v != nil {
+		_u.SetIsPublic(*v)
+	}
+	return _u
+}
+
 // SetRefreshIntervalMinutes sets the "refresh_interval_minutes" field.
 func (_u *ProxySourceUpdate) SetRefreshIntervalMinutes(v int) *ProxySourceUpdate {
 	_u.mutation.ResetRefreshIntervalMinutes()
@@ -299,6 +313,9 @@ func (_u *ProxySourceUpdate) sqlSave(ctx context.Context) (_node int, err error)
 	if value, ok := _u.mutation.SubscriptionURL(); ok {
 		_spec.SetField(proxysource.FieldSubscriptionURL, field.TypeString, value)
 	}
+	if value, ok := _u.mutation.IsPublic(); ok {
+		_spec.SetField(proxysource.FieldIsPublic, field.TypeBool, value)
+	}
 	if value, ok := _u.mutation.RefreshIntervalMinutes(); ok {
 		_spec.SetField(proxysource.FieldRefreshIntervalMinutes, field.TypeInt, value)
 	}
@@ -417,6 +434,20 @@ func (_u *ProxySourceUpdateOne) SetSubscriptionURL(v string) *ProxySourceUpdateO
 func (_u *ProxySourceUpdateOne) SetNillableSubscriptionURL(v *string) *ProxySourceUpdateOne {
 	if v != nil {
 		_u.SetSubscriptionURL(*v)
+	}
+	return _u
+}
+
+// SetIsPublic sets the "is_public" field.
+func (_u *ProxySourceUpdateOne) SetIsPublic(v bool) *ProxySourceUpdateOne {
+	_u.mutation.SetIsPublic(v)
+	return _u
+}
+
+// SetNillableIsPublic sets the "is_public" field if the given value is not nil.
+func (_u *ProxySourceUpdateOne) SetNillableIsPublic(v *bool) *ProxySourceUpdateOne {
+	if v != nil {
+		_u.SetIsPublic(*v)
 	}
 	return _u
 }
@@ -646,6 +677,9 @@ func (_u *ProxySourceUpdateOne) sqlSave(ctx context.Context) (_node *ProxySource
 	}
 	if value, ok := _u.mutation.SubscriptionURL(); ok {
 		_spec.SetField(proxysource.FieldSubscriptionURL, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.IsPublic(); ok {
+		_spec.SetField(proxysource.FieldIsPublic, field.TypeBool, value)
 	}
 	if value, ok := _u.mutation.RefreshIntervalMinutes(); ok {
 		_spec.SetField(proxysource.FieldRefreshIntervalMinutes, field.TypeInt, value)

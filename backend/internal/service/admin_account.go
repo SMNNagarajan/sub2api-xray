@@ -536,6 +536,36 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 	return account, nil
 }
 
+func accountProxyOwnerCompatible(accountOwnerID *int64, proxy *Proxy) bool {
+	if proxy == nil {
+		return false
+	}
+	if accountOwnerID == nil {
+		return proxy.OwnerUserID == nil
+	}
+	if proxy.OwnerUserID != nil && *proxy.OwnerUserID == *accountOwnerID {
+		return true
+	}
+	return proxy.IsPublic
+}
+
+func (s *adminServiceImpl) validateAccountProxyOwner(ctx context.Context, accountOwnerID, proxyID *int64) error {
+	if proxyID == nil || *proxyID == 0 {
+		return nil
+	}
+	proxy, err := s.proxyRepo.GetByID(ctx, *proxyID)
+	if err != nil {
+		return err
+	}
+	if accountProxyOwnerCompatible(accountOwnerID, proxy) {
+		return nil
+	}
+	if accountOwnerID == nil {
+		return infraerrors.BadRequest("ACCOUNT_PROXY_OWNER_MISMATCH", "system accounts can only use system proxies")
+	}
+	return infraerrors.BadRequest("ACCOUNT_PROXY_OWNER_MISMATCH", "user accounts can only use owned or public proxies")
+}
+
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
 	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
 	if err != nil {
@@ -576,6 +606,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 
 	account, err := buildAccountForCreate(input, accountExtra)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.validateAccountProxyOwner(ctx, nil, account.ProxyID); err != nil {
 		return nil, err
 	}
 	if err := s.accountRepo.Create(ctx, account); err != nil {
@@ -745,6 +778,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	// 影子代理恒继承母账号(由 propagateProxyToShadows 同步),不接受独立编辑——外审 B/P1;
 	// 否则要等母账号下次改 proxy 才被覆盖,期间影子会出现"有时继承、有时独立"的漂移。
 	if input.ProxyID != nil && !account.IsCredentialShadow() {
+		if err := s.validateAccountProxyOwner(ctx, account.OwnerUserID, input.ProxyID); err != nil {
+			return nil, err
+		}
 		// 0 表示清除代理（前端发送 0 而不是 null 来表达清除意图）
 		if *input.ProxyID == 0 {
 			account.ProxyID = nil
@@ -964,6 +1000,11 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			if acc != nil && acc.IsCredentialShadow() {
 				return nil, infraerrors.Newf(http.StatusBadRequest, "SPARK_SHADOW_PROXY_INHERITED",
 					"spark shadow account %d proxy is inherited from its parent and cannot be set in bulk; manage it on the parent account", acc.ID)
+			}
+			if acc != nil {
+				if err := s.validateAccountProxyOwner(ctx, acc.OwnerUserID, input.ProxyID); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}

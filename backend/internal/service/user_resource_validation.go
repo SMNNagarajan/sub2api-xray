@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"net"
 	"strconv"
 	"strings"
 
@@ -501,7 +500,9 @@ func (s *UserResourceService) normalizeAndValidateProxyPayload(ctx context.Conte
 		if err := validateAllowedValue("protocol", protocol, "http", "https", "socks", "socks5", "socks5h"); err != nil {
 			return err
 		}
-	} else if err := validateAllowedValue("protocol", protocol, "http", "https", "socks", "socks5", "socks5h", "vmess", "vless", "trojan", "ss", "shadowsocks"); err != nil {
+	} else if err := validateAllowedValue("protocol", protocol,
+		"http", "https", "socks", "socks5", "socks5h", "vmess", "vless", "trojan", "ss", "shadowsocks",
+		"hysteria", "hysteria2", "tuic", "anytls", "naive", "wireguard"); err != nil {
 		return err
 	}
 	payload["protocol"] = protocol
@@ -552,7 +553,23 @@ func (s *UserResourceService) normalizeAndValidateProxyPayload(ctx context.Conte
 		if _, exists := extra["xray_outbound"]; exists {
 			return invalidUserResourceField("extra.xray_outbound", "is not accepted for user-owned proxies")
 		}
+		if _, exists := extra["sing_box_outbound"]; exists {
+			return invalidUserResourceField("extra.sing_box_outbound", "is not accepted for user-owned proxies")
+		}
+		if _, exists := extra["sing_box_endpoint"]; exists {
+			return invalidUserResourceField("extra.sing_box_endpoint", "is not accepted for user-owned proxies")
+		}
 		candidate := &Proxy{Kind: kind, Protocol: protocol, Host: host, Port: int(port), Username: urAsString(state["username"]), Password: urAsString(state["password"]), Extra: extra}
+		if requiresSingBoxRuntime(candidate) {
+			spec, err := buildSingBoxRuntimeSpec(xrayRawNode(candidate), candidate)
+			if err != nil {
+				return invalidUserResourceField("extra", "does not contain a valid sing-box node")
+			}
+			if err := validateUserSingBoxSpecHosts(ctx, spec); err != nil {
+				return invalidUserResourceField("extra", "sing-box node must resolve to a public endpoint")
+			}
+			return nil
+		}
 		outbound, err := buildXrayOutbound(xrayRawNode(candidate), candidate)
 		if err != nil {
 			return invalidUserResourceField("extra", "does not contain a valid xray node")
@@ -561,9 +578,6 @@ func (s *UserResourceService) normalizeAndValidateProxyPayload(ctx context.Conte
 			return invalidUserResourceField("extra", "xray node must resolve to a public endpoint")
 		}
 	} else {
-		if net.ParseIP(host) == nil {
-			return invalidUserResourceField("host", "must be a public IP address for standard proxies")
-		}
 		if _, err := resolveExternalHostIPs(ctx, host); err != nil {
 			return invalidUserResourceField("host", "must resolve to a public endpoint")
 		}
@@ -572,24 +586,7 @@ func (s *UserResourceService) normalizeAndValidateProxyPayload(ctx context.Conte
 }
 
 func validateUserXrayOutboundHosts(ctx context.Context, outbound map[string]any) error {
-	settings, _ := outbound["settings"].(map[string]any)
-	hosts := make([]string, 0, 2)
-	for _, key := range []string{"vnext", "servers"} {
-		for _, server := range mapSliceFromAny(settings[key]) {
-			if host := strings.TrimSpace(urAsString(server["address"])); host != "" {
-				hosts = append(hosts, host)
-			}
-		}
-	}
-	if len(hosts) == 0 {
-		return fmt.Errorf("xray outbound has no server address")
-	}
-	for _, host := range hosts {
-		if _, err := resolveExternalHostIPs(ctx, host); err != nil {
-			return err
-		}
-	}
-	return nil
+	return pinUserOwnedXrayOutbound(ctx, outbound)
 }
 
 func normalizeModelRouting(raw any) (map[string][]int64, error) {

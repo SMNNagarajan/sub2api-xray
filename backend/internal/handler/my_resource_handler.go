@@ -63,6 +63,7 @@ func myListOptions(c *gin.Context) service.UserResourceListOptions {
 		Timezone:  c.Query("timezone"),
 		SortBy:    c.Query("sort_by"),
 		SortOrder: c.Query("sort_order"),
+		OwnedOnly: parseBoolQuery(c.Query("owned_only")),
 	}
 }
 
@@ -1042,6 +1043,7 @@ func (h *MyResourceHandler) SyncProxySource(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	service.RedactProxySourceSyncResultForUserResponse(result)
 	response.Success(c, result)
 }
 
@@ -1054,11 +1056,27 @@ func (h *MyResourceHandler) ImportProxyNodes(c *gin.Context) {
 	if !ok {
 		return
 	}
-	result, err := h.userResourceService.ImportProxyNodes(c.Request.Context(), userID, stringValue(payload["name_prefix"]), stringValue(payload["content"]))
+	isPublic := false
+	if rawVisibility, exists := payload["is_public"]; exists {
+		var valid bool
+		isPublic, valid = rawVisibility.(bool)
+		if !valid {
+			response.BadRequest(c, "Invalid request: is_public must be a boolean")
+			return
+		}
+	}
+	result, err := h.userResourceService.ImportProxyNodes(
+		c.Request.Context(),
+		userID,
+		stringValue(payload["name_prefix"]),
+		stringValue(payload["content"]),
+		isPublic,
+	)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
+	service.RedactProxyImportResultForUserResponse(result)
 	response.Success(c, result)
 }
 

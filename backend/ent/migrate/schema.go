@@ -1419,6 +1419,7 @@ var (
 		{Name: "owner_user_id", Type: field.TypeInt64},
 		{Name: "name", Type: field.TypeString, Size: 100},
 		{Name: "subscription_url", Type: field.TypeString, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "is_public", Type: field.TypeBool, Default: false},
 		{Name: "refresh_interval_minutes", Type: field.TypeInt, Default: 1440},
 		{Name: "last_synced_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "last_sync_status", Type: field.TypeString, Size: 20, Default: "never"},
@@ -1444,7 +1445,7 @@ var (
 			{
 				Name:    "proxysource_last_sync_status",
 				Unique:  false,
-				Columns: []*schema.Column{ProxySourcesColumns[9]},
+				Columns: []*schema.Column{ProxySourcesColumns[10]},
 			},
 		},
 	}

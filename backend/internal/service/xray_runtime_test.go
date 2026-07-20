@@ -2,11 +2,15 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"net"
+	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,6 +65,136 @@ func TestBuildXrayOutboundVLESSReality(t *testing.T) {
 	}
 }
 
+func TestBuildXrayOutboundVLESSXHTTP(t *testing.T) {
+	extra := `{"downloadSettings":{"server":"203.0.113.20","port":443,"servername":"download.example.com","path":"/download"}}`
+	query := url.Values{
+		"type":          {"xhttp"},
+		"security":      {"tls"},
+		"sni":           {"edge.example.com"},
+		"allowInsecure": {"1"},
+		"path":          {"/path"},
+		"mode":          {"stream-up"},
+		"extra":         {extra},
+	}
+	out, err := buildXrayOutbound("vless://11111111-1111-1111-1111-111111111111@203.0.113.10:443?"+query.Encode(), &Proxy{Kind: "xray"})
+	if err != nil {
+		t.Fatalf("build xhttp outbound: %v", err)
+	}
+	stream := out["streamSettings"].(map[string]any)
+	if stream["network"] != "xhttp" {
+		t.Fatalf("xhttp network mismatch: %#v", stream)
+	}
+	tls := stream["tlsSettings"].(map[string]any)
+	if _, exists := tls["allowInsecure"]; exists {
+		t.Fatalf("removed Xray allowInsecure option was emitted: %#v", tls)
+	}
+	xhttp := stream["xhttpSettings"].(map[string]any)
+	if xhttp["path"] != "/path" || xhttp["mode"] != "stream-up" {
+		t.Fatalf("xhttp settings mismatch: %#v", xhttp)
+	}
+	download := xhttp["extra"].(map[string]any)["downloadSettings"].(map[string]any)
+	downloadXHTTP := download["xhttpSettings"].(map[string]any)
+	downloadTLS := download["tlsSettings"].(map[string]any)
+	if download["address"] != "203.0.113.20" || download["network"] != "xhttp" || downloadXHTTP["path"] != "/download" || downloadTLS["serverName"] != "download.example.com" {
+		t.Fatalf("xhttp download settings were not preserved: %#v", download)
+	}
+}
+
+func TestBuildXrayOutboundRejectsMalformedXHTTPDownloadSettings(t *testing.T) {
+	query := url.Values{
+		"type":  {"xhttp"},
+		"extra": {`{"downloadSettings":{"server":"download.example.com"}}`},
+	}
+	if _, err := buildXrayOutbound("vless://11111111-1111-1111-1111-111111111111@203.0.113.10:443?"+query.Encode(), &Proxy{Kind: "xray"}); err == nil {
+		t.Fatal("expected malformed xhttp download settings to be rejected")
+	}
+}
+
+func TestPinLegacyInsecureCertificateCreatesXrayPin(t *testing.T) {
+	server := httptest.NewTLSServer(nil)
+	defer server.Close()
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse TLS server URL: %v", err)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatalf("parse TLS server port: %v", err)
+	}
+	tlsSettings := map[string]any{xrayLegacyInsecureMarker: true, "serverName": "mismatched.example.com"}
+	if err := pinLegacyInsecureCertificate(context.Background(), tlsSettings, u.Hostname(), port); err != nil {
+		t.Fatalf("pin legacy insecure certificate: %v", err)
+	}
+	pin := stringFromMap(tlsSettings, "pinnedPeerCertSha256")
+	if len(pin) != sha256.Size*2 {
+		t.Fatalf("unexpected certificate pin: %q", pin)
+	}
+	if _, exists := tlsSettings[xrayLegacyInsecureMarker]; exists {
+		t.Fatal("internal legacy marker was not removed")
+	}
+}
+
+func TestPrepareXrayTLSCompatibilityPinsMainAndXHTTPDownload(t *testing.T) {
+	server := httptest.NewTLSServer(nil)
+	defer server.Close()
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse TLS server URL: %v", err)
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil {
+		t.Fatalf("parse TLS server port: %v", err)
+	}
+	mainTLS := map[string]any{xrayLegacyInsecureMarker: true, "serverName": "main.example.com"}
+	downloadTLS := map[string]any{xrayLegacyInsecureMarker: true, "serverName": "download.example.com"}
+	outbound := map[string]any{
+		"settings": map[string]any{
+			"vnext": []map[string]any{{"address": u.Hostname(), "port": port}},
+		},
+		"streamSettings": map[string]any{
+			"tlsSettings": mainTLS,
+			"xhttpSettings": map[string]any{
+				"extra": map[string]any{
+					"downloadSettings": map[string]any{
+						"address": u.Hostname(), "port": port, "tlsSettings": downloadTLS,
+					},
+				},
+			},
+		},
+	}
+	if err := prepareXrayTLSCompatibility(context.Background(), outbound); err != nil {
+		t.Fatalf("prepare xray TLS compatibility: %v", err)
+	}
+	for name, settings := range map[string]map[string]any{"main": mainTLS, "download": downloadTLS} {
+		if pin := stringFromMap(settings, "pinnedPeerCertSha256"); len(pin) != sha256.Size*2 {
+			t.Fatalf("%s TLS pin mismatch: %q", name, pin)
+		}
+		if _, exists := settings[xrayLegacyInsecureMarker]; exists {
+			t.Fatalf("%s internal marker was not removed", name)
+		}
+	}
+}
+
+func TestTLSSettingsUsesXray26CertificateFields(t *testing.T) {
+	settings := tlsSettings(url.Values{
+		"allowInsecure":         {"1"},
+		"pinnedPeerCertSha256":  {strings.Repeat("ab", sha256.Size)},
+		"verifyPeerCertInNames": {"one.example.com,two.example.com"},
+	})
+	if _, ok := settings[xrayLegacyInsecureMarker].(bool); !ok {
+		t.Fatal("legacy allowInsecure marker is missing")
+	}
+	if _, ok := settings["pinnedPeerCertSha256"].(string); !ok {
+		t.Fatalf("Xray pin must be a comma-separated string: %#v", settings)
+	}
+	if settings["verifyPeerCertByName"] != "one.example.com,two.example.com" {
+		t.Fatalf("legacy verify names were not migrated: %#v", settings)
+	}
+	if _, exists := settings["verifyPeerCertInNames"]; exists {
+		t.Fatalf("removed Xray verifyPeerCertInNames field was emitted: %#v", settings)
+	}
+}
+
 func TestBuildXrayOutboundShadowsocks(t *testing.T) {
 	userInfo := base64.RawURLEncoding.EncodeToString([]byte("aes-128-gcm:secret"))
 	out, err := buildXrayOutbound("ss://"+userInfo+"@ss.example.com:8388#node", &Proxy{Kind: "xray"})
@@ -93,6 +227,44 @@ func TestPinUserOwnedXrayOutboundPinsPublicLiteral(t *testing.T) {
 	}
 	if server["address"] != "8.8.8.8" {
 		t.Fatalf("unexpected pinned address: %v", server["address"])
+	}
+}
+
+func TestPinUserOwnedXrayOutboundRejectsPrivateXHTTPDownloadEndpoint(t *testing.T) {
+	outbound := map[string]any{
+		"settings": map[string]any{
+			"vnext": []map[string]any{{"address": "8.8.8.8", "port": 443}},
+		},
+		"streamSettings": map[string]any{
+			"xhttpSettings": map[string]any{
+				"extra": map[string]any{
+					"downloadSettings": map[string]any{"server": "127.0.0.1", "port": 443},
+				},
+			},
+		},
+	}
+	if err := pinUserOwnedXrayOutbound(context.Background(), outbound); err == nil {
+		t.Fatal("expected private xhttp download endpoint to be rejected")
+	}
+}
+
+func TestPinUserOwnedXrayOutboundPinsPublicXHTTPDownloadEndpoint(t *testing.T) {
+	download := map[string]any{"server": "8.8.4.4", "port": 443}
+	outbound := map[string]any{
+		"settings": map[string]any{
+			"vnext": []map[string]any{{"address": "8.8.8.8", "port": 443}},
+		},
+		"streamSettings": map[string]any{
+			"xhttpSettings": map[string]any{
+				"extra": map[string]any{"downloadSettings": download},
+			},
+		},
+	}
+	if err := pinUserOwnedXrayOutbound(context.Background(), outbound); err != nil {
+		t.Fatalf("pin public xhttp download endpoint: %v", err)
+	}
+	if download["server"] != "8.8.4.4" {
+		t.Fatalf("unexpected pinned xhttp endpoint: %#v", download)
 	}
 }
 
@@ -193,6 +365,37 @@ func TestXrayRuntimeManagerStartsRealProcess(t *testing.T) {
 	}
 	if secondURL != proxyURL {
 		t.Fatalf("xray runtime did not reuse the live instance: first=%s second=%s", proxyURL, secondURL)
+	}
+}
+
+func TestXrayXHTTPConfigPassesBinaryCheck(t *testing.T) {
+	bin := strings.TrimSpace(os.Getenv("XRAY_BIN"))
+	if bin == "" {
+		t.Skip("set XRAY_BIN to run real xray config checks")
+	}
+	query := url.Values{
+		"type":          {"xhttp"},
+		"security":      {"tls"},
+		"sni":           {"edge.example.com"},
+		"allowInsecure": {"1"},
+		"path":          {"/path"},
+		"mode":          {"stream-up"},
+		"extra":         {`{"downloadSettings":{"server":"203.0.113.20","port":443,"servername":"download.example.com"}}`},
+	}
+	outbound, err := buildXrayOutbound("vless://11111111-1111-1111-1111-111111111111@203.0.113.10:443?"+query.Encode(), &Proxy{Kind: "xray"})
+	if err != nil {
+		t.Fatalf("build xhttp outbound: %v", err)
+	}
+	config, err := json.Marshal(buildXrayRuntimeConfig(1080, outbound, true))
+	if err != nil {
+		t.Fatalf("marshal xhttp config: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "xhttp.json")
+	if err := os.WriteFile(path, config, 0o600); err != nil {
+		t.Fatalf("write xhttp config: %v", err)
+	}
+	if output, err := exec.Command(bin, "run", "-test", "-config", path).CombinedOutput(); err != nil {
+		t.Fatalf("xray rejected generated xhttp config: %v: %s", err, strings.TrimSpace(string(output)))
 	}
 }
 

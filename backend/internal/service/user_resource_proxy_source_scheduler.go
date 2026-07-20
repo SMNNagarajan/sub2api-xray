@@ -71,6 +71,7 @@ func (s *UserResourceService) Close() error {
 			logger.LegacyPrintf("service.user_resources", "proxy source scheduler shutdown timed out")
 		}
 	}
+	s.stopProxyQualityWorkers()
 	return nil
 }
 

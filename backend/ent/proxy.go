@@ -28,7 +28,7 @@ type Proxy struct {
 	Name string `json:"name,omitempty"`
 	// NULL means system/admin resource; non-NULL means user-owned private resource.
 	OwnerUserID *int64 `json:"owner_user_id,omitempty"`
-	// System proxy can be exposed as selectable read-only proxy to users.
+	// A proxy exposed as a selectable read-only proxy to other users.
 	IsPublic bool `json:"is_public,omitempty"`
 	// standard | xray
 	Kind string `json:"kind,omitempty"`

@@ -41,7 +41,7 @@ func (Proxy) Fields() []ent.Field {
 			Comment("NULL means system/admin resource; non-NULL means user-owned private resource."),
 		field.Bool("is_public").
 			Default(false).
-			Comment("System proxy can be exposed as selectable read-only proxy to users."),
+			Comment("A proxy exposed as a selectable read-only proxy to other users."),
 		field.String("kind").
 			MaxLen(20).
 			Default("standard").

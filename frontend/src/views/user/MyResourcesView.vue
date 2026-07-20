@@ -2,9 +2,9 @@
   <AppLayout>
     <TablePageLayout>
       <template #filters>
-        <div :class="['flex flex-col justify-between', resource === 'proxies' ? 'gap-3 2xl:flex-row 2xl:items-start' : 'gap-4 lg:flex-row lg:items-start']">
-          <div :class="['flex flex-1 flex-wrap items-center', resource === 'proxies' ? 'gap-2' : 'gap-3']">
-            <div :class="['relative w-full', resource === 'proxies' ? 'sm:w-72 lg:w-64 xl:w-72' : 'sm:w-64']">
+        <div :class="resource === 'proxies' ? 'flex flex-wrap items-center gap-3' : 'flex flex-col justify-between gap-4 lg:flex-row lg:items-start'">
+          <div :class="resource === 'proxies' ? 'contents' : 'flex flex-1 flex-wrap items-center gap-3'">
+            <div :class="['relative w-full', resource === 'proxies' ? 'sm:w-64' : 'sm:w-64']">
               <Icon name="search" size="md" class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
               <input
                 v-model="filters.search"
@@ -58,14 +58,44 @@
             </button>
           </div>
 
-          <div class="flex w-full flex-shrink-0 flex-wrap items-center justify-end gap-2 lg:w-auto">
+          <div :class="resource === 'proxies' ? 'flex flex-1 flex-wrap items-center justify-end gap-2' : 'flex w-full flex-shrink-0 flex-wrap items-center justify-end gap-2 lg:w-auto'">
             <button class="btn btn-secondary" :disabled="loading" :title="mr('actions.refresh')" @click="loadData">
               <Icon name="refresh" size="md" :class="loading ? 'animate-spin' : ''" />
+            </button>
+            <button
+              v-if="resource === 'proxies'"
+              class="btn btn-secondary"
+              :disabled="batchTesting || batchQualityChecking || loading"
+              :title="mr('actions.testConnection')"
+              @click="batchTestProxies"
+            >
+              <Icon name="play" size="md" class="mr-2" :class="batchTesting ? 'animate-pulse' : ''" />
+              <span>{{ batchTesting ? mr('actions.batchProgress', { completed: proxyBatchProgress.completed, total: proxyBatchProgress.total }) : mr('actions.testConnection') }}</span>
+            </button>
+            <button
+              v-if="resource === 'proxies'"
+              class="btn btn-secondary"
+              :disabled="batchQualityChecking || batchTesting || loading"
+              :title="mr('actions.batchQuality')"
+              @click="batchQualityCheckProxies"
+            >
+              <Icon name="shield" size="md" class="mr-2" :class="batchQualityChecking ? 'animate-pulse' : ''" />
+              <span>{{ batchQualityChecking ? mr('actions.batchProgress', { completed: proxyBatchProgress.completed, total: proxyBatchProgress.total }) : mr('actions.batchQuality') }}</span>
+            </button>
+            <button
+              v-if="resource === 'proxies'"
+              class="btn btn-danger"
+              :disabled="selectedIds.length === 0 || loading"
+              :title="t('admin.proxies.batchDeleteAction')"
+              @click="batchDeleteProxies"
+            >
+              <Icon name="trash" size="md" class="mr-2" />
+              {{ t('admin.proxies.batchDeleteAction') }}
             </button>
             <div class="relative">
               <button class="btn btn-secondary" type="button" :title="mr('actions.columns')" @click="showColumnSettings = !showColumnSettings">
                 <Icon name="grid" size="md" class="mr-2" />
-                <span v-if="resource !== 'proxies'" class="hidden md:inline">{{ mr('actions.columns') }}</span>
+                <span class="hidden md:inline">{{ mr('actions.columns') }}</span>
               </button>
               <div v-if="showColumnSettings" class="absolute right-0 top-full z-50 mt-1 max-h-80 w-48 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-dark-600 dark:bg-dark-800">
                 <button
@@ -81,13 +111,16 @@
               </div>
             </div>
             <button v-if="resource === 'proxies'" class="btn btn-secondary" :title="mr('actions.importNodes')" :aria-label="mr('actions.importNodes')" @click="openProxyImport">
-              <Icon name="upload" size="sm" />
+              <Icon name="upload" size="sm" class="mr-2" />
+              {{ t('admin.proxies.dataImport') }}
             </button>
             <button v-if="resource === 'proxies'" class="btn btn-secondary" :title="mr('actions.export')" :aria-label="mr('actions.export')" @click="exportProxies">
-              <Icon name="download" size="sm" />
+              <Icon name="download" size="sm" class="mr-2" />
+              {{ selectedIds.length ? t('admin.proxies.dataExportSelected') : t('admin.proxies.dataExport') }}
             </button>
             <button v-if="resource === 'proxies'" class="btn btn-secondary" :title="mr('actions.sources')" :aria-label="mr('actions.sources')" @click="openProxySources">
-              <Icon name="link" size="sm" />
+              <Icon name="link" size="sm" class="mr-2" />
+              {{ mr('actions.sources') }}
             </button>
             <button v-if="resource === 'assigned-subscriptions'" class="btn btn-secondary" @click="openBulkAssign">
               {{ mr('actions.bulkAssign') }}
@@ -151,6 +184,7 @@
           </template>
           <template v-if="selectableResource" #cell-select="{ row }">
             <input
+              v-if="resource !== 'proxies' || canMutateItem(row)"
               type="checkbox"
               class="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary-600 focus:ring-primary-500"
               :checked="selectedIds.includes(Number(row.id))"
@@ -213,10 +247,12 @@
             <span :class="['badge', String(value || '').startsWith('socks5') ? 'badge-primary' : 'badge-gray']">{{ String(value || '-').toUpperCase() }}</span>
           </template>
           <template v-if="resource === 'proxies'" #cell-address="{ row }">
-            <code class="code inline-block max-w-[70%] break-all text-xs sm:max-w-none sm:whitespace-nowrap sm:break-normal">{{ row.host }}:{{ row.port }}</code>
+            <span v-if="row.details_hidden" class="whitespace-nowrap text-xs text-gray-400">{{ mr('states.publicDetailsHidden') }}</span>
+            <code v-else class="code inline-block max-w-[70%] break-all text-xs sm:max-w-none sm:whitespace-nowrap sm:break-normal">{{ row.host }}:{{ row.port }}</code>
           </template>
           <template v-if="resource === 'proxies'" #cell-auth="{ row }">
-            <span :class="['badge', row.has_auth ? 'badge-primary' : 'badge-gray']">{{ mr(row.has_auth ? 'states.configured' : 'states.none') }}</span>
+            <span v-if="row.details_hidden" class="whitespace-nowrap text-xs text-gray-400">{{ mr('states.publicDetailsHidden') }}</span>
+            <span v-else :class="['badge', row.has_auth ? 'badge-primary' : 'badge-gray']">{{ mr(row.has_auth ? 'states.configured' : 'states.none') }}</span>
           </template>
           <template v-if="resource === 'proxies'" #cell-location="{ row }">
             <div class="flex items-center gap-2">
@@ -272,11 +308,11 @@
               <button v-if="resource === 'groups'" class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20" @click="deleteItem(row)">
                 <Icon name="trash" size="sm" /><span class="text-xs">{{ mr('actions.delete') }}</span>
               </button>
-              <button v-if="resource === 'proxies'" class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-emerald-50 hover:text-emerald-600 dark:hover:bg-emerald-900/20" @click="testProxy(row)">
-                <Icon name="checkCircle" size="sm" /><span class="text-xs">{{ mr('actions.testConnection') }}</span>
+              <button v-if="resource === 'proxies'" class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-emerald-50 hover:text-emerald-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-emerald-900/20" :disabled="testingProxyIds.has(Number(row.id))" @click="testProxy(row)">
+                <Icon name="checkCircle" size="sm" :class="testingProxyIds.has(Number(row.id)) ? 'animate-pulse' : ''" /><span class="text-xs">{{ mr('actions.testConnection') }}</span>
               </button>
-              <button v-if="resource === 'proxies'" class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-blue-900/20" @click="qualityCheckProxy(row)">
-                <Icon name="shield" size="sm" /><span class="text-xs">{{ mr('actions.quality') }}</span>
+              <button v-if="resource === 'proxies'" class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-blue-50 hover:text-blue-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-blue-900/20" :disabled="qualityCheckingProxyIds.has(Number(row.id))" @click="qualityCheckProxy(row)">
+                <Icon name="shield" size="sm" :class="qualityCheckingProxyIds.has(Number(row.id)) ? 'animate-pulse' : ''" /><span class="text-xs">{{ mr('actions.quality') }}</span>
               </button>
               <button v-if="resource === 'proxies' && canMutateItem(row)" class="flex flex-col items-center gap-0.5 rounded-lg p-1.5 text-gray-500 transition-colors hover:bg-gray-100 hover:text-primary-600 dark:hover:bg-dark-700" @click="openEdit(row)">
                 <Icon name="edit" size="sm" /><span class="text-xs">{{ mr('actions.edit') }}</span>
@@ -1043,6 +1079,7 @@
               <thead class="bg-gray-50 dark:bg-dark-900/70">
                 <tr>
                   <th class="px-3 py-3 text-left font-medium text-gray-500 dark:text-dark-300">{{ mr('table.name') }}</th>
+                  <th class="px-3 py-3 text-left font-medium text-gray-500 dark:text-dark-300">{{ mr('columns.visibility') }}</th>
                   <th class="px-3 py-3 text-left font-medium text-gray-500 dark:text-dark-300">{{ mr('table.interval') }}</th>
                   <th class="px-3 py-3 text-left font-medium text-gray-500 dark:text-dark-300">{{ mr('table.status') }}</th>
                   <th class="px-3 py-3 text-right font-medium text-gray-500 dark:text-dark-300">{{ mr('table.actions') }}</th>
@@ -1050,16 +1087,17 @@
               </thead>
               <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
                 <tr v-if="proxySourcesLoading">
-                  <td colspan="4" class="px-3 py-8 text-center text-gray-500">{{ mr('table.loading') }}</td>
+                  <td colspan="5" class="px-3 py-8 text-center text-gray-500">{{ mr('table.loading') }}</td>
                 </tr>
                 <tr v-else-if="proxySources.length === 0">
-                  <td colspan="4" class="px-3 py-8 text-center text-gray-500">{{ mr('table.noSources') }}</td>
+                  <td colspan="5" class="px-3 py-8 text-center text-gray-500">{{ mr('table.noSources') }}</td>
                 </tr>
                 <tr v-for="source in proxySources" v-else :key="source.id">
                   <td class="max-w-[260px] px-3 py-3">
                     <div class="truncate font-medium text-gray-900 dark:text-white">{{ source.name }}</div>
                     <div class="truncate text-xs text-gray-500 dark:text-dark-400">{{ source.subscription_url }}</div>
                   </td>
+                  <td class="px-3 py-3"><span :class="['badge', source.is_public ? 'badge-success' : 'badge-gray']">{{ mr(source.is_public ? 'states.public' : 'states.private') }}</span></td>
                   <td class="px-3 py-3 text-gray-700 dark:text-dark-100">{{ source.refresh_interval_minutes || 0 }}m</td>
                   <td class="px-3 py-3 text-gray-700 dark:text-dark-100">
                     <div>{{ source.last_sync_status || '-' }}</div>
@@ -1093,6 +1131,10 @@
               <span class="mb-1 block text-sm text-gray-700 dark:text-dark-100">{{ mr('fields.refreshIntervalMinutes') }}</span>
               <input v-model.number="proxySourceForm.refresh_interval_minutes" class="input" type="number" min="5" required />
             </label>
+            <label class="flex cursor-pointer items-center gap-3 rounded-lg border border-gray-200 px-3 py-3 dark:border-dark-700">
+              <input v-model="proxySourceForm.is_public" type="checkbox" class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500" />
+              <span class="text-sm font-medium text-gray-700 dark:text-dark-100">{{ mr('fields.publicForAllUsers') }}</span>
+            </label>
             <div v-if="operationError" class="rounded-md bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/30 dark:text-red-200">{{ operationError }}</div>
             <button class="btn btn-primary w-full" type="submit" :disabled="saving">{{ proxySourceEditingID ? mr('actions.updateSource') : mr('actions.saveSource') }}</button>
           </form>
@@ -1117,9 +1159,9 @@ import Select, { type SelectOption } from '@/components/common/Select.vue'
 import type { Column } from '@/components/common/types'
 import Icon from '@/components/icons/Icon.vue'
 import MyProxyEditorDialog from '@/components/user/MyProxyEditorDialog.vue'
-import { myResourcesApi, type ResourceItem, type ResourcePage, type UserOAuthCredentialsResult } from '@/api/myResources'
+import { myResourcesApi, type ResourceItem, type ResourcePage, type UserOAuthCredentialsResult, type UserProxyTestResult } from '@/api/myResources'
 import { useAppStore } from '@/stores/app'
-import type { GroupPlatform } from '@/types'
+import type { GroupPlatform, ProxyQualityCheckResult } from '@/types'
 import {
   USER_ACCOUNT_STATUS_OPTIONS,
   USER_GROUP_STATUS_OPTIONS,
@@ -1151,6 +1193,7 @@ interface ColumnConfig {
   key: string
   label: string
   badge?: boolean
+  class?: string
 }
 
 interface PageConfig {
@@ -1231,18 +1274,18 @@ const configs = computed<Record<ResourceKind, PageConfig>>(() => ({
     createLabel: mr('pages.proxies.create'),
     defaultPayload: { name: '', kind: 'standard', protocol: 'socks5', host: '', port: 1080, status: 'active' },
     columns: [
-      { key: 'name', label: mr('columns.name') },
-      { key: 'visibility', label: mr('columns.visibility') },
-      { key: 'kind', label: mr('columns.proxyMode'), badge: true },
-      { key: 'protocol', label: mr('columns.protocol') },
-      { key: 'address', label: mr('columns.address') },
-      { key: 'auth', label: mr('columns.auth') },
-      { key: 'location', label: mr('columns.location') },
-      { key: 'account_count', label: mr('columns.accountCount') },
-      { key: 'latency', label: mr('columns.latency') },
-      { key: 'expiry', label: mr('columns.expiry') },
-      { key: 'created_at', label: mr('columns.createdAt') },
-      { key: 'status', label: mr('columns.status'), badge: true },
+      { key: 'name', label: mr('columns.name'), class: 'min-w-40' },
+      { key: 'visibility', label: mr('columns.visibility'), class: 'min-w-24' },
+      { key: 'kind', label: mr('columns.proxyMode'), badge: true, class: 'min-w-28' },
+      { key: 'protocol', label: mr('columns.protocol'), class: 'min-w-28' },
+      { key: 'address', label: mr('columns.address'), class: 'min-w-44' },
+      { key: 'auth', label: mr('columns.auth'), class: 'min-w-32' },
+      { key: 'location', label: mr('columns.location'), class: 'min-w-40' },
+      { key: 'account_count', label: mr('columns.accountCount'), class: 'min-w-24' },
+      { key: 'latency', label: mr('columns.latency'), class: 'min-w-40' },
+      { key: 'expiry', label: mr('columns.expiry'), class: 'min-w-36' },
+      { key: 'created_at', label: mr('columns.createdAt'), class: 'min-w-36' },
+      { key: 'status', label: mr('columns.status'), badge: true, class: 'min-w-24' },
     ],
   },
   'assigned-subscriptions': {
@@ -1328,6 +1371,11 @@ const filters = reactive({
   end_date: '',
 })
 const selectedIds = ref<number[]>([])
+const testingProxyIds = ref<Set<number>>(new Set())
+const qualityCheckingProxyIds = ref<Set<number>>(new Set())
+const batchTesting = ref(false)
+const batchQualityChecking = ref(false)
+const proxyBatchProgress = reactive({ completed: 0, total: 0 })
 const groupOptions = ref<ResourceItem[]>([])
 const proxyOptions = ref<ResourceItem[]>([])
 const subscriptionGroupOptions = computed(() => groupOptions.value.filter(group => group.subscription_type === 'subscription'))
@@ -1362,6 +1410,12 @@ const xrayProxyProtocolOptions: SelectOption[] = [
   { value: 'vless', label: 'VLESS' },
   { value: 'trojan', label: 'Trojan' },
   { value: 'ss', label: 'Shadowsocks' },
+  { value: 'hysteria', label: 'Hysteria' },
+  { value: 'hysteria2', label: 'Hysteria2' },
+  { value: 'tuic', label: 'TUIC' },
+  { value: 'anytls', label: 'AnyTLS' },
+  { value: 'naive', label: 'Naive' },
+  { value: 'wireguard', label: 'WireGuard' },
 ]
 const proxyProtocolFilterOptions = computed<SelectOption[]>(() => [
   { value: '', label: mr('filters.allProtocols') },
@@ -1484,6 +1538,7 @@ const proxySourceForm = reactive({
   name: '',
   subscription_url: '',
   refresh_interval_minutes: 1440,
+  is_public: false,
 })
 const editorForm = reactive({
   group: {
@@ -1622,12 +1677,15 @@ const accountProxyOptions = computed<SelectOption[]>(() => [
   { value: 0, label: mr('fields.noProxy') },
   ...proxyOptions.value.map(proxy => ({
     value: Number(proxy.id),
-    label: `${proxy.name} · ${proxy.protocol} · ${proxy.host}:${proxy.port}${proxy.is_public && !proxy.owner_user_id ? ` · ${mr('states.public')}` : ''}`,
+    label: proxy.details_hidden
+      ? `${proxy.name} · ${String(proxy.protocol || '').toUpperCase()} · ${mr('states.publicDetailsHidden')}`
+      : `${proxy.name} · ${String(proxy.protocol || '').toUpperCase()} · ${proxy.host}:${proxy.port}${proxy.is_public ? ` · ${mr('states.public')}` : ''}`,
   })),
 ])
 
 const selectableResource = computed(() => ['accounts', 'proxies', 'redeem-codes'].includes(resource.value))
-const allVisibleSelected = computed(() => items.value.length > 0 && items.value.every(item => selectedIds.value.includes(Number(item.id))))
+const selectableVisibleItems = computed(() => resource.value === 'proxies' ? items.value.filter(canMutateItem) : items.value)
+const allVisibleSelected = computed(() => selectableVisibleItems.value.length > 0 && selectableVisibleItems.value.every(item => selectedIds.value.includes(Number(item.id))))
 const visibleColumns = computed(() => config.value.columns.filter(column => !hiddenColumns.value.has(column.key)))
 const toggleableAlignedColumns = computed(() => config.value.columns.filter(column => column.key !== 'name'))
 const alignedColumns = computed<Column[]>(() => {
@@ -1635,11 +1693,12 @@ const alignedColumns = computed<Column[]>(() => {
     key: column.key,
     label: column.label,
     sortable: false,
+    class: column.class,
   }))
   if (selectableResource.value) {
-    columns.unshift({ key: 'select', label: '', sortable: false })
+    columns.unshift({ key: 'select', label: '', sortable: false, class: undefined })
   }
-  columns.push({ key: 'actions', label: mr('table.actions'), sortable: false })
+  columns.push({ key: 'actions', label: mr('table.actions'), sortable: false, class: resource.value === 'proxies' ? 'min-w-64' : undefined })
   return columns
 })
 const accountOAuthEnabled = computed(() => resource.value === 'accounts' && ['oauth', 'setup-token'].includes(editorForm.account.type))
@@ -2562,7 +2621,7 @@ const recordDetailFields = computed(() => {
 })
 
 function canMutateItem(item: ResourceItem): boolean {
-  if (resource.value === 'proxies' && item.is_public && !item.owner_user_id) return false
+  if (resource.value === 'proxies') return item.is_owned === true
   return true
 }
 
@@ -2597,24 +2656,205 @@ async function deleteItem(item: ResourceItem): Promise<void> {
   }
 }
 
-async function testProxy(item: ResourceItem): Promise<void> {
+function updateRunningProxySet(target: typeof testingProxyIds, proxyID: number, running: boolean): void {
+  const next = new Set(target.value)
+  if (running) next.add(proxyID)
+  else next.delete(proxyID)
+  target.value = next
+}
+
+function applyProxyTestResult(proxyID: number, result: UserProxyTestResult): void {
+  const target = items.value.find(item => Number(item.id) === proxyID)
+  if (!target) return
+  target.latency_status = result.success ? 'success' : 'failed'
+  target.latency_ms = result.success ? result.latency_ms : undefined
+  target.latency_message = result.message
+  target.ip_address = result.success ? result.ip_address : undefined
+  target.country = result.success ? result.country : undefined
+  target.country_code = result.success ? result.country_code : undefined
+  target.region = result.success ? result.region : undefined
+  target.city = result.success ? result.city : undefined
+}
+
+function applyProxyQualityResult(proxyID: number, result: ProxyQualityCheckResult): void {
+  const target = items.value.find(item => Number(item.id) === proxyID)
+  if (!target) return
+  target.quality_status = result.challenge_count > 0
+    ? 'challenge'
+    : result.failed_count > 0
+      ? 'failed'
+      : result.warn_count > 0
+        ? 'warn'
+        : 'healthy'
+  target.quality_score = result.score
+  target.quality_grade = result.grade
+  target.quality_summary = result.summary
+  target.quality_checked = result.checked_at
+  if (result.base_latency_ms != null) {
+    applyProxyTestResult(proxyID, {
+      success: true,
+      message: result.summary,
+      latency_ms: result.base_latency_ms,
+      ip_address: result.exit_ip,
+      country: result.country,
+      country_code: result.country_code,
+    })
+  }
+}
+
+async function runProxyTest(proxyID: number, notify: boolean): Promise<UserProxyTestResult | null> {
+  updateRunningProxySet(testingProxyIds, proxyID, true)
   try {
-    const result = await myResourcesApi.proxies.test(Number(item.id))
-    appStore.showSuccess(result?.message || mr('messages.testSuccess'))
-    await loadData()
+    const result = await myResourcesApi.proxies.test(proxyID)
+    applyProxyTestResult(proxyID, result)
+    if (notify) {
+      if (result.success) appStore.showSuccess(result.message || mr('messages.testSuccess'))
+      else appStore.showError(result.message || mr('messages.testFailed'))
+    }
+    return result
   } catch (error) {
-    appStore.showError(extractApiErrorMessage(error, mr('messages.testFailed')))
+    if (notify) appStore.showError(extractApiErrorMessage(error, mr('messages.testFailed')))
+    return null
+  } finally {
+    updateRunningProxySet(testingProxyIds, proxyID, false)
+  }
+}
+
+async function testProxy(item: ResourceItem): Promise<void> {
+  await runProxyTest(Number(item.id), true)
+}
+
+async function runProxyQualityCheck(proxyID: number, notify: boolean): Promise<ProxyQualityCheckResult | null> {
+  updateRunningProxySet(qualityCheckingProxyIds, proxyID, true)
+  try {
+    const result = await myResourcesApi.proxies.qualityCheck(proxyID)
+    applyProxyQualityResult(proxyID, result)
+    if (notify) appStore.showSuccess(mr('messages.qualityResult', { grade: result.grade || '-', summary: result.summary || '' }))
+    return result
+  } catch (error) {
+    if (notify) appStore.showError(extractApiErrorMessage(error, mr('messages.qualityFailed')))
+    return null
+  } finally {
+    updateRunningProxySet(qualityCheckingProxyIds, proxyID, false)
   }
 }
 
 async function qualityCheckProxy(item: ResourceItem): Promise<void> {
+  await runProxyQualityCheck(Number(item.id), true)
+}
+
+async function proxyIDsForBatch(): Promise<number[]> {
+  if (selectedIds.value.length > 0) return [...selectedIds.value]
+  const ids: number[] = []
+  let currentPage = 1
+  let pages = 1
+  do {
+    const result = await myResourcesApi.proxies.list({
+      page: currentPage,
+      page_size: 200,
+      search: filters.search || undefined,
+      status: filters.status || undefined,
+      type: filters.type || undefined,
+      protocol: filters.protocol || undefined,
+      owned_only: true,
+    })
+    ids.push(...result.items.map(item => Number(item.id)).filter(id => id > 0))
+    pages = Math.max(1, Number(result.pages || 1))
+    currentPage++
+  } while (currentPage <= pages)
+  return Array.from(new Set(ids))
+}
+
+async function runConcurrentProxyBatch(ids: number[], concurrency: number, worker: (id: number) => Promise<void>): Promise<void> {
+  let index = 0
+  proxyBatchProgress.completed = 0
+  proxyBatchProgress.total = ids.length
+  const run = async () => {
+    while (index < ids.length) {
+      const current = ids[index++]
+      await worker(current)
+      proxyBatchProgress.completed++
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, ids.length) }, () => run()))
+}
+
+async function batchTestProxies(): Promise<void> {
+  if (batchTesting.value || batchQualityChecking.value) return
+  batchTesting.value = true
   try {
-    const result = await myResourcesApi.proxies.qualityCheck(Number(item.id))
-    appStore.showSuccess(mr('messages.qualityResult', { grade: result?.grade || '-', summary: result?.summary || '' }))
-    await loadData()
+    const ids = await proxyIDsForBatch()
+    if (ids.length === 0) {
+      appStore.showInfo(mr('messages.batchProxyEmpty'))
+      return
+    }
+    let success = 0
+    let failed = 0
+    await runConcurrentProxyBatch(ids, 5, async id => {
+      const result = await runProxyTest(id, false)
+      if (result?.success) success++
+      else failed++
+    })
+    const message = mr('messages.batchTestResult', { total: ids.length, success, failed })
+    if (failed > 0) appStore.showWarning(message)
+    else appStore.showSuccess(message)
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, mr('messages.testFailed')))
+  } finally {
+    batchTesting.value = false
+    proxyBatchProgress.completed = 0
+    proxyBatchProgress.total = 0
+  }
+}
+
+async function batchQualityCheckProxies(): Promise<void> {
+  if (batchQualityChecking.value || batchTesting.value) return
+  batchQualityChecking.value = true
+  try {
+    const ids = await proxyIDsForBatch()
+    if (ids.length === 0) {
+      appStore.showInfo(mr('messages.batchProxyEmpty'))
+      return
+    }
+    const stats = { healthy: 0, warn: 0, challenge: 0, failed: 0 }
+    await runConcurrentProxyBatch(ids, 3, async id => {
+      const result = await runProxyQualityCheck(id, false)
+      if (!result) stats.failed++
+      else if (result.challenge_count > 0) stats.challenge++
+      else if (result.failed_count > 0) stats.failed++
+      else if (result.warn_count > 0) stats.warn++
+      else stats.healthy++
+    })
+    const message = mr('messages.batchQualityResult', { total: ids.length, ...stats })
+    if (stats.failed > 0 || stats.challenge > 0) appStore.showWarning(message)
+    else appStore.showSuccess(message)
   } catch (error) {
     appStore.showError(extractApiErrorMessage(error, mr('messages.qualityFailed')))
+  } finally {
+    batchQualityChecking.value = false
+    proxyBatchProgress.completed = 0
+    proxyBatchProgress.total = 0
   }
+}
+
+async function batchDeleteProxies(): Promise<void> {
+  const ids = [...selectedIds.value]
+  if (ids.length === 0 || !window.confirm(t('admin.proxies.batchDeleteConfirm', { count: ids.length }))) return
+
+  const results = await Promise.allSettled(ids.map(id => myResourcesApi.proxies.delete(id)))
+  const deletedIds = ids.filter((_, index) => results[index].status === 'fulfilled')
+  const failed = ids.length - deletedIds.length
+  selectedIds.value = selectedIds.value.filter(id => !deletedIds.includes(id))
+
+  if (deletedIds.length > 0) {
+    const message = t('admin.proxies.batchDeleteDone', { deleted: deletedIds.length, skipped: failed })
+    if (failed > 0) appStore.showWarning(message)
+    else appStore.showSuccess(message)
+    await loadData()
+    return
+  }
+
+  appStore.showError(t('admin.proxies.batchDeleteFailed'))
 }
 
 async function exportProxies(): Promise<void> {
@@ -2835,6 +3075,7 @@ function resetProxySourceForm(): void {
   proxySourceForm.name = ''
   proxySourceForm.subscription_url = ''
   proxySourceForm.refresh_interval_minutes = 1440
+  proxySourceForm.is_public = false
 }
 
 async function loadProxySources(): Promise<void> {
@@ -2873,6 +3114,7 @@ function editProxySource(source: ResourceItem): void {
   proxySourceForm.name = stringValue(source.name)
   proxySourceForm.subscription_url = stringValue(source.subscription_url)
   proxySourceForm.refresh_interval_minutes = numberValue(source.refresh_interval_minutes, 1440)
+  proxySourceForm.is_public = Boolean(source.is_public)
   operationError.value = ''
 }
 
@@ -3065,7 +3307,7 @@ function toggleSelected(id: number): void {
 }
 
 function toggleAllVisible(): void {
-  const ids = items.value.map(item => Number(item.id))
+  const ids = selectableVisibleItems.value.map(item => Number(item.id))
   if (allVisibleSelected.value) {
     selectedIds.value = selectedIds.value.filter(id => !ids.includes(id))
   } else {
@@ -3097,6 +3339,12 @@ function changePageSize(nextPageSize: number): void {
   void loadData()
 }
 
+function applyAccountFilterFromRoute(): void {
+  if (resource.value !== 'account-logs' && resource.value !== 'upstream-errors') return
+  const accountID = Number(route.query.account_id)
+  filters.account_id = Number.isInteger(accountID) && accountID > 0 ? String(accountID) : ''
+}
+
 watch(resource, () => {
   page.page = 1
   selectedIds.value = []
@@ -3105,7 +3353,15 @@ watch(resource, () => {
     search: '', status: '', platform: '', type: '', protocol: '',
     user_id: '', api_key_id: '', account_id: '', start_date: '', end_date: '',
   })
+  applyAccountFilterFromRoute()
   loadColumnSettings()
+  void loadData()
+})
+
+watch(() => route.query.account_id, () => {
+  if (resource.value !== 'account-logs' && resource.value !== 'upstream-errors') return
+  applyAccountFilterFromRoute()
+  page.page = 1
   void loadData()
 })
 
@@ -3134,6 +3390,7 @@ watch(() => editorForm.account.type, () => {
 })
 
 onMounted(() => {
+  applyAccountFilterFromRoute()
   loadColumnSettings()
   void loadData()
 })

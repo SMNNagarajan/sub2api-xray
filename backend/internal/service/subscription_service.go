@@ -546,11 +546,11 @@ func (s *SubscriptionService) assignSubscriptionWithReuse(ctx context.Context, i
 			if newExpiresAt.After(MaxExpiresAt) {
 				newExpiresAt = MaxExpiresAt
 			}
-			renewalNotes := input.Notes
+			renewalInput := *input
 			if strings.TrimSpace(sub.Notes) == strings.TrimSpace(input.Notes) {
-				renewalNotes = ""
+				renewalInput.Notes = ""
 			}
-			if err := s.updateExistingSubscriptionTerm(ctx, sub, renewalNotes, now, newExpiresAt, true); err != nil {
+			if err := s.updateExistingSubscriptionTerm(ctx, sub, &renewalInput, now, newExpiresAt, true); err != nil {
 				return nil, false, err
 			}
 			s.maybeInvalidateAssignmentCaches(input.UserID, input.GroupID, false)

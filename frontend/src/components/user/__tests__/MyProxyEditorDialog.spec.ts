@@ -50,6 +50,8 @@ describe('MyProxyEditorDialog', () => {
     api.create.mockResolvedValue({ id: 1 })
     api.update.mockResolvedValue({ id: 1 })
     api.importNodes.mockResolvedValue({ created: [], errors: [] })
+    api.sourceCreate.mockResolvedValue({ id: 11 })
+    api.sourceSync.mockResolvedValue({ created_count: 0, imported_count: 0 })
   })
 
   it('uses a scrollable BaseDialog and offers all supported creation modes', async () => {
@@ -77,15 +79,25 @@ describe('MyProxyEditorDialog', () => {
     expect(wrapper.get('[data-test="proxy-stat-duplicate"]').text()).toContain('1')
   })
 
-  it('does not expose or submit public visibility for user-owned proxies', async () => {
+  it('submits public visibility for a user-owned proxy', async () => {
     const wrapper = mountDialog()
     await wrapper.get('[data-test="proxy-name"]').setValue('private-proxy')
     await wrapper.get('[data-test="proxy-host"]').setValue('proxy.example.com')
+    await wrapper.get('[data-test="proxy-is-public"]').setValue(true)
     await wrapper.get('form').trigger('submit')
 
     await vi.waitFor(() => expect(api.create).toHaveBeenCalled())
-    expect(api.create.mock.calls[0][0]).not.toHaveProperty('is_public')
-    expect(wrapper.html()).not.toContain('is_public')
+    expect(api.create.mock.calls[0][0]).toMatchObject({ is_public: true })
+  })
+
+  it('applies public visibility to batch imports', async () => {
+    const wrapper = mountDialog({ initialMode: 'batch' })
+    await wrapper.get('[data-test="proxy-batch-input"]').setValue('hysteria://secret@proxy.example.com:443?upmbps=20&downmbps=100')
+    await wrapper.get('[data-test="proxy-is-public"]').setValue(true)
+    await wrapper.get('form').trigger('submit')
+
+    await vi.waitFor(() => expect(api.importNodes).toHaveBeenCalled())
+    expect(api.importNodes.mock.calls[0][0]).toMatchObject({ is_public: true })
   })
 
   it('preserves redacted credentials while editing unless fields are changed', async () => {

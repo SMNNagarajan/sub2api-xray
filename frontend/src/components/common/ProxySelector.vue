@@ -114,7 +114,7 @@
                 </template>
               </div>
               <div class="truncate text-xs text-gray-500 dark:text-gray-400">
-                {{ proxy.protocol }}://{{ proxy.host }}:{{ proxy.port }}
+                {{ proxyEndpointLabel(proxy) }}
               </div>
             </div>
 
@@ -190,6 +190,7 @@ interface Props {
   modelValue: number | null
   proxies: Proxy[]
   disabled?: boolean
+  testProxy?: (id: number) => Promise<ProxyTestResult>
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -220,8 +221,15 @@ const selectedLabel = computed(() => {
     return t('admin.accounts.noProxy')
   }
   const proxy = selectedProxy.value
-  return `${proxy.name} (${proxy.protocol}://${proxy.host}:${proxy.port})`
+  return `${proxy.name} (${proxyEndpointLabel(proxy)})`
 })
+
+const proxyEndpointLabel = (proxy: Proxy): string => {
+  if (proxy.details_hidden) {
+    return t('myResources.states.publicDetailsHidden')
+  }
+  return `${proxy.protocol}://${proxy.host}:${proxy.port}`
+}
 
 const filteredProxies = computed(() => {
   if (!searchQuery.value) {
@@ -256,7 +264,9 @@ const handleTestProxy = async (proxy: Proxy) => {
 
   testingProxyIds.add(proxy.id)
   try {
-    const result = await adminAPI.proxies.testProxy(proxy.id)
+    const result = props.testProxy
+      ? await props.testProxy(proxy.id)
+      : await adminAPI.proxies.testProxy(proxy.id)
     testResults[proxy.id] = result
   } catch (error: any) {
     testResults[proxy.id] = {
@@ -277,7 +287,9 @@ const handleBatchTest = async () => {
   const testPromises = props.proxies.map(async (proxy) => {
     testingProxyIds.add(proxy.id)
     try {
-      const result = await adminAPI.proxies.testProxy(proxy.id)
+      const result = props.testProxy
+        ? await props.testProxy(proxy.id)
+        : await adminAPI.proxies.testProxy(proxy.id)
       testResults[proxy.id] = result
     } catch (error: any) {
       testResults[proxy.id] = {

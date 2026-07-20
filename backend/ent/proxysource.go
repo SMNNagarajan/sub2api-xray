@@ -29,6 +29,8 @@ type ProxySource struct {
 	Name string `json:"name,omitempty"`
 	// SubscriptionURL holds the value of the "subscription_url" field.
 	SubscriptionURL string `json:"subscription_url,omitempty"`
+	// Whether proxies imported from this source are selectable by all users.
+	IsPublic bool `json:"is_public,omitempty"`
 	// RefreshIntervalMinutes holds the value of the "refresh_interval_minutes" field.
 	RefreshIntervalMinutes int `json:"refresh_interval_minutes,omitempty"`
 	// LastSyncedAt holds the value of the "last_synced_at" field.
@@ -47,6 +49,8 @@ func (*ProxySource) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
+		case proxysource.FieldIsPublic:
+			values[i] = new(sql.NullBool)
 		case proxysource.FieldID, proxysource.FieldOwnerUserID, proxysource.FieldRefreshIntervalMinutes, proxysource.FieldLastImportedCount:
 			values[i] = new(sql.NullInt64)
 		case proxysource.FieldName, proxysource.FieldSubscriptionURL, proxysource.FieldLastSyncStatus, proxysource.FieldLastSyncError:
@@ -110,6 +114,12 @@ func (_m *ProxySource) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field subscription_url", values[i])
 			} else if value.Valid {
 				_m.SubscriptionURL = value.String
+			}
+		case proxysource.FieldIsPublic:
+			if value, ok := values[i].(*sql.NullBool); !ok {
+				return fmt.Errorf("unexpected type %T for field is_public", values[i])
+			} else if value.Valid {
+				_m.IsPublic = value.Bool
 			}
 		case proxysource.FieldRefreshIntervalMinutes:
 			if value, ok := values[i].(*sql.NullInt64); !ok {
@@ -198,6 +208,9 @@ func (_m *ProxySource) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("subscription_url=")
 	builder.WriteString(_m.SubscriptionURL)
+	builder.WriteString(", ")
+	builder.WriteString("is_public=")
+	builder.WriteString(fmt.Sprintf("%v", _m.IsPublic))
 	builder.WriteString(", ")
 	builder.WriteString("refresh_interval_minutes=")
 	builder.WriteString(fmt.Sprintf("%v", _m.RefreshIntervalMinutes))

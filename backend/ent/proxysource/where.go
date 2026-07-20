@@ -84,6 +84,11 @@ func SubscriptionURL(v string) predicate.ProxySource {
 	return predicate.ProxySource(sql.FieldEQ(FieldSubscriptionURL, v))
 }
 
+// IsPublic applies equality check predicate on the "is_public" field. It's identical to IsPublicEQ.
+func IsPublic(v bool) predicate.ProxySource {
+	return predicate.ProxySource(sql.FieldEQ(FieldIsPublic, v))
+}
+
 // RefreshIntervalMinutes applies equality check predicate on the "refresh_interval_minutes" field. It's identical to RefreshIntervalMinutesEQ.
 func RefreshIntervalMinutes(v int) predicate.ProxySource {
 	return predicate.ProxySource(sql.FieldEQ(FieldRefreshIntervalMinutes, v))
@@ -407,6 +412,16 @@ func SubscriptionURLEqualFold(v string) predicate.ProxySource {
 // SubscriptionURLContainsFold applies the ContainsFold predicate on the "subscription_url" field.
 func SubscriptionURLContainsFold(v string) predicate.ProxySource {
 	return predicate.ProxySource(sql.FieldContainsFold(FieldSubscriptionURL, v))
+}
+
+// IsPublicEQ applies the EQ predicate on the "is_public" field.
+func IsPublicEQ(v bool) predicate.ProxySource {
+	return predicate.ProxySource(sql.FieldEQ(FieldIsPublic, v))
+}
+
+// IsPublicNEQ applies the NEQ predicate on the "is_public" field.
+func IsPublicNEQ(v bool) predicate.ProxySource {
+	return predicate.ProxySource(sql.FieldNEQ(FieldIsPublic, v))
 }
 
 // RefreshIntervalMinutesEQ applies the EQ predicate on the "refresh_interval_minutes" field.

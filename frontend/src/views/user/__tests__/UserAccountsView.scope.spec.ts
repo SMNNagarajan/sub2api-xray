@@ -16,9 +16,11 @@ describe('UserAccountsView user scope and admin-equivalent experience', () => {
     expect(source).not.toContain("'/admin/")
   })
 
-  it('keeps account dialogs within the viewport and scrolls their content', () => {
-    expect(source).toContain('max-h-[calc(100dvh-1rem)]')
-    expect(source).toContain('overflow-y-auto overscroll-contain')
+  it('reuses the original account dialogs in user scope', () => {
+    expect(source).toContain('<CreateAccountModal')
+    expect(source).toContain('<EditAccountModal')
+    expect(source.match(/scope="user"/g)).toHaveLength(2)
+    expect(source).toContain('<BaseDialog')
   })
 
   it('keeps account filters full width on mobile', () => {
@@ -32,18 +34,15 @@ describe('UserAccountsView user scope and admin-equivalent experience', () => {
     }
   })
 
-  it('does not resend redacted credentials and requires complete replacement secrets', () => {
-    expect(source).toContain('const shouldSend = !editingId.value || credentialsTouched.value')
-    expect(source).toContain('if (!shouldSend) return undefined')
-    expect(source).toContain("if (form.type === 'apikey')")
-    expect(source).toContain("mr('messages.apiKeyRequired')")
-    expect(source).toContain("if (form.type === 'service_account')")
-    expect(source).toContain("mr('messages.serviceAccountRequired')")
+  it('loads full account details before opening the shared editor', () => {
+    expect(source).toContain('myResourcesApi.accounts.get(Number(row.id))')
+    expect(source).toContain('credentials_status: item.credentials_status || {}')
+    expect(source).toContain('editingAccount.value = toAccount')
   })
 
   it('keeps visible copy and operation messages localized', () => {
     expect(source).not.toMatch(/[\p{Script=Han}]/u)
     expect(source).toContain("mr('actions.clearError')")
-    expect(source).toContain(":title=\"t('common.copy')\"")
+    expect(source).toContain("t('common.more')")
   })
 })

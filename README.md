@@ -36,7 +36,7 @@ The user resource workspace is controlled by `enable_user_resources` and is disa
 
 ## Current Release
 
-The current release is `v0.1.157-xray1`, based on upstream `v0.1.157`. See the [release notes](docs/releases/v0.1.157-xray1.md) for changes, upgrade notes, and validation results.
+The current release is `v0.1.161-xray2`, based on upstream `v0.1.161`. See the [release notes](docs/releases/v0.1.161-xray2.md) for changes, upgrade notes, and validation results.
 
 ## Important Notice
 

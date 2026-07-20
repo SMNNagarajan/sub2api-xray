@@ -82,6 +82,20 @@ func (_c *ProxySourceCreate) SetSubscriptionURL(v string) *ProxySourceCreate {
 	return _c
 }
 
+// SetIsPublic sets the "is_public" field.
+func (_c *ProxySourceCreate) SetIsPublic(v bool) *ProxySourceCreate {
+	_c.mutation.SetIsPublic(v)
+	return _c
+}
+
+// SetNillableIsPublic sets the "is_public" field if the given value is not nil.
+func (_c *ProxySourceCreate) SetNillableIsPublic(v *bool) *ProxySourceCreate {
+	if v != nil {
+		_c.SetIsPublic(*v)
+	}
+	return _c
+}
+
 // SetRefreshIntervalMinutes sets the "refresh_interval_minutes" field.
 func (_c *ProxySourceCreate) SetRefreshIntervalMinutes(v int) *ProxySourceCreate {
 	_c.mutation.SetRefreshIntervalMinutes(v)
@@ -203,6 +217,10 @@ func (_c *ProxySourceCreate) defaults() error {
 		v := proxysource.DefaultUpdatedAt()
 		_c.mutation.SetUpdatedAt(v)
 	}
+	if _, ok := _c.mutation.IsPublic(); !ok {
+		v := proxysource.DefaultIsPublic
+		_c.mutation.SetIsPublic(v)
+	}
 	if _, ok := _c.mutation.RefreshIntervalMinutes(); !ok {
 		v := proxysource.DefaultRefreshIntervalMinutes
 		_c.mutation.SetRefreshIntervalMinutes(v)
@@ -244,6 +262,9 @@ func (_c *ProxySourceCreate) check() error {
 		if err := proxysource.SubscriptionURLValidator(v); err != nil {
 			return &ValidationError{Name: "subscription_url", err: fmt.Errorf(`ent: validator failed for field "ProxySource.subscription_url": %w`, err)}
 		}
+	}
+	if _, ok := _c.mutation.IsPublic(); !ok {
+		return &ValidationError{Name: "is_public", err: errors.New(`ent: missing required field "ProxySource.is_public"`)}
 	}
 	if _, ok := _c.mutation.RefreshIntervalMinutes(); !ok {
 		return &ValidationError{Name: "refresh_interval_minutes", err: errors.New(`ent: missing required field "ProxySource.refresh_interval_minutes"`)}
@@ -309,6 +330,10 @@ func (_c *ProxySourceCreate) createSpec() (*ProxySource, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.SubscriptionURL(); ok {
 		_spec.SetField(proxysource.FieldSubscriptionURL, field.TypeString, value)
 		_node.SubscriptionURL = value
+	}
+	if value, ok := _c.mutation.IsPublic(); ok {
+		_spec.SetField(proxysource.FieldIsPublic, field.TypeBool, value)
+		_node.IsPublic = value
 	}
 	if value, ok := _c.mutation.RefreshIntervalMinutes(); ok {
 		_spec.SetField(proxysource.FieldRefreshIntervalMinutes, field.TypeInt, value)
@@ -451,6 +476,18 @@ func (u *ProxySourceUpsert) SetSubscriptionURL(v string) *ProxySourceUpsert {
 // UpdateSubscriptionURL sets the "subscription_url" field to the value that was provided on create.
 func (u *ProxySourceUpsert) UpdateSubscriptionURL() *ProxySourceUpsert {
 	u.SetExcluded(proxysource.FieldSubscriptionURL)
+	return u
+}
+
+// SetIsPublic sets the "is_public" field.
+func (u *ProxySourceUpsert) SetIsPublic(v bool) *ProxySourceUpsert {
+	u.Set(proxysource.FieldIsPublic, v)
+	return u
+}
+
+// UpdateIsPublic sets the "is_public" field to the value that was provided on create.
+func (u *ProxySourceUpsert) UpdateIsPublic() *ProxySourceUpsert {
+	u.SetExcluded(proxysource.FieldIsPublic)
 	return u
 }
 
@@ -664,6 +701,20 @@ func (u *ProxySourceUpsertOne) SetSubscriptionURL(v string) *ProxySourceUpsertOn
 func (u *ProxySourceUpsertOne) UpdateSubscriptionURL() *ProxySourceUpsertOne {
 	return u.Update(func(s *ProxySourceUpsert) {
 		s.UpdateSubscriptionURL()
+	})
+}
+
+// SetIsPublic sets the "is_public" field.
+func (u *ProxySourceUpsertOne) SetIsPublic(v bool) *ProxySourceUpsertOne {
+	return u.Update(func(s *ProxySourceUpsert) {
+		s.SetIsPublic(v)
+	})
+}
+
+// UpdateIsPublic sets the "is_public" field to the value that was provided on create.
+func (u *ProxySourceUpsertOne) UpdateIsPublic() *ProxySourceUpsertOne {
+	return u.Update(func(s *ProxySourceUpsert) {
+		s.UpdateIsPublic()
 	})
 }
 
@@ -1057,6 +1108,20 @@ func (u *ProxySourceUpsertBulk) SetSubscriptionURL(v string) *ProxySourceUpsertB
 func (u *ProxySourceUpsertBulk) UpdateSubscriptionURL() *ProxySourceUpsertBulk {
 	return u.Update(func(s *ProxySourceUpsert) {
 		s.UpdateSubscriptionURL()
+	})
+}
+
+// SetIsPublic sets the "is_public" field.
+func (u *ProxySourceUpsertBulk) SetIsPublic(v bool) *ProxySourceUpsertBulk {
+	return u.Update(func(s *ProxySourceUpsert) {
+		s.SetIsPublic(v)
+	})
+}
+
+// UpdateIsPublic sets the "is_public" field to the value that was provided on create.
+func (u *ProxySourceUpsertBulk) UpdateIsPublic() *ProxySourceUpsertBulk {
+	return u.Update(func(s *ProxySourceUpsert) {
+		s.UpdateIsPublic()
 	})
 }
 

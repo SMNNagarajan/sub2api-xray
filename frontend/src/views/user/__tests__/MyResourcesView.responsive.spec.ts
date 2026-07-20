@@ -34,6 +34,8 @@ describe('MyResourcesView responsive localization', () => {
     expect(source).toContain("mr('columns.usage')")
     expect(source).toContain("mr('actions.userRates')")
     expect(source).toContain('max-w-[70%] break-all text-xs sm:max-w-none sm:whitespace-nowrap sm:break-normal')
+    expect(source).toContain("mr('states.publicDetailsHidden')")
+    expect(source).toContain("class: 'min-w-44'")
     expect(source).not.toContain('class="code whitespace-nowrap text-xs"')
 
     const testAction = source.indexOf("mr('actions.testConnection')")

@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -15,11 +17,16 @@ import (
 
 func TestRedactPublicProxyHidesCredentialsAndXraySecrets(t *testing.T) {
 	item := map[string]any{
-		"id":            int64(10),
-		"owner_user_id": nil,
-		"is_public":     true,
-		"username":      "proxy-user",
-		"password":      "proxy-pass",
+		"id":              int64(10),
+		"owner_user_id":   int64(77),
+		"is_public":       true,
+		"host":            "proxy-owner.example.com",
+		"port":            443,
+		"ip_address":      "203.0.113.20",
+		"latency_message": "dial tcp 203.0.113.20:443: refused",
+		"has_auth":        true,
+		"username":        "proxy-user",
+		"password":        "proxy-pass",
 		"extra": map[string]any{
 			"raw":           "vless://uuid@example.com:443?pbk=secret",
 			"xray_outbound": map[string]any{"settings": "secret"},
@@ -36,6 +43,12 @@ func TestRedactPublicProxyHidesCredentialsAndXraySecrets(t *testing.T) {
 
 	if item["username"] != "" || item["password"] != "" {
 		t.Fatalf("public proxy credentials were not redacted: %#v", item)
+	}
+	if item["host"] != "" || item["port"] != nil || item["ip_address"] != "" || item["latency_message"] != "" || item["has_auth"] != nil {
+		t.Fatalf("public proxy endpoint details were not redacted: %#v", item)
+	}
+	if item["owner_user_id"] != nil || item["is_owned"] != false || item["details_hidden"] != true {
+		t.Fatalf("public proxy ownership metadata was not redacted: %#v", item)
 	}
 	extra, ok := item["extra"].(map[string]any)
 	if !ok {
@@ -74,6 +87,9 @@ func TestRedactPublicProxyKeepsOwnerPrivateFieldsForOwner(t *testing.T) {
 	if item["username"] != "proxy-user" || item["password"] != "proxy-pass" {
 		t.Fatalf("owner proxy credentials should not be redacted: %#v", item)
 	}
+	if item["is_owned"] != true {
+		t.Fatalf("owner marker missing from owned proxy: %#v", item)
+	}
 	extra := item["extra"].(map[string]any)
 	if extra["raw"] != "vless://secret" {
 		t.Fatalf("owner xray raw node should not be redacted: %#v", extra)
@@ -105,12 +121,65 @@ func TestRedactProxyForUserResponseHidesOwnedCredentials(t *testing.T) {
 	}
 }
 
+func TestRedactProxyImportResultForUserResponseHidesAllNodeSecrets(t *testing.T) {
+	result := &ProxyImportResult{
+		Created: []map[string]any{{
+			"username": "created-user",
+			"password": "created-pass",
+			"extra":    map[string]any{"raw": "vless://created-secret"},
+		}},
+		Updated: []map[string]any{{
+			"username": "updated-user",
+			"password": "updated-pass",
+			"extra":    map[string]any{"raw": "tuic://updated-secret"},
+		}},
+	}
+
+	RedactProxyImportResultForUserResponse(result)
+
+	for _, item := range append(result.Created, result.Updated...) {
+		if item["username"] != "" || item["password"] != "" {
+			t.Fatalf("proxy import response leaked credentials: %#v", item)
+		}
+		extra := item["extra"].(map[string]any)
+		if extra["raw"] != "" || extra["redacted"] != true {
+			t.Fatalf("proxy import response leaked node configuration: %#v", extra)
+		}
+	}
+}
+
+func TestRedactProxySourceSyncResultForUserResponseHidesAllNodeSecrets(t *testing.T) {
+	result := &ProxySourceSyncResult{
+		Created: []map[string]any{{
+			"password": "created-pass",
+			"extra":    map[string]any{"raw": "hysteria2://created-secret"},
+		}},
+		Updated: []map[string]any{{
+			"password": "updated-pass",
+			"extra":    map[string]any{"raw": "anytls://updated-secret"},
+		}},
+	}
+
+	RedactProxySourceSyncResultForUserResponse(result)
+
+	for _, item := range append(result.Created, result.Updated...) {
+		if item["password"] != "" {
+			t.Fatalf("proxy source sync response leaked credentials: %#v", item)
+		}
+		extra := item["extra"].(map[string]any)
+		if extra["raw"] != "" || extra["redacted"] != true {
+			t.Fatalf("proxy source sync response leaked node configuration: %#v", extra)
+		}
+	}
+}
+
 func TestRedactAccountForUserResponseHidesCredentials(t *testing.T) {
 	item := map[string]any{
 		"id": int64(42),
 		"credentials": map[string]any{
-			"refresh": "sensitive",
-			"nested":  map[string]any{"value": "also-sensitive"},
+			"api_key":       "sensitive",
+			"refresh_token": "also-sensitive",
+			"base_url":      "https://api.example.com",
 		},
 	}
 
@@ -119,12 +188,16 @@ func TestRedactAccountForUserResponseHidesCredentials(t *testing.T) {
 	if item["has_credentials"] != true {
 		t.Fatalf("expected has_credentials marker: %#v", item)
 	}
+	status, ok := item["credentials_status"].(map[string]bool)
+	if !ok || !status["has_api_key"] || !status["has_refresh_token"] {
+		t.Fatalf("expected credential presence markers: %#v", item)
+	}
 	if item["credentials_redacted"] != true {
 		t.Fatalf("expected credentials_redacted marker: %#v", item)
 	}
 	credentials, ok := item["credentials"].(map[string]any)
-	if !ok || len(credentials) != 0 {
-		t.Fatalf("credentials should be replaced with an empty map: %#v", item["credentials"])
+	if !ok || len(credentials) != 1 || credentials["base_url"] != "https://api.example.com" {
+		t.Fatalf("credentials should only retain non-sensitive settings: %#v", item["credentials"])
 	}
 }
 
@@ -279,6 +352,45 @@ func TestParseProxyNodeErrorDoesNotEchoRawNodeSecret(t *testing.T) {
 	}
 }
 
+func TestParseProxyNodeLinesSupportsV2RayNShareFormats(t *testing.T) {
+	vmessJSON := []byte(`{"v":"2","ps":"vmess node","add":"vmess.example.com","port":"443","id":"11111111-1111-1111-1111-111111111111","aid":"0","net":"ws","tls":"tls"}`)
+	vmess := "vmess://" + base64.RawStdEncoding.EncodeToString(vmessJSON)
+	legacySS := "ss://" + base64.RawURLEncoding.EncodeToString([]byte("aes-128-gcm:ss-secret@ss.example.com:8388")) + "#ss-node"
+
+	nodes := parseProxyNodeLines(vmess + "\n" + legacySS)
+	if len(nodes) != 2 {
+		t.Fatalf("expected two parsed nodes, got %#v", nodes)
+	}
+	if nodes[0].Err != "" || nodes[0].Protocol != "vmess" || nodes[0].Host != "vmess.example.com" || nodes[0].Port != 443 || nodes[0].Network != "ws" {
+		t.Fatalf("unexpected vmess node: %#v", nodes[0])
+	}
+	if _, err := buildXrayOutbound(nodes[0].Raw, &Proxy{Kind: "xray", Protocol: "vmess"}); err != nil {
+		t.Fatalf("parsed vmess node did not produce a valid outbound: %v", err)
+	}
+	if nodes[1].Err != "" || nodes[1].Protocol != "ss" || nodes[1].Username != "aes-128-gcm" || nodes[1].Password != "ss-secret" || nodes[1].Name != "ss-node" {
+		t.Fatalf("unexpected shadowsocks node: %#v", nodes[1])
+	}
+	if _, err := buildXrayOutbound(nodes[1].Raw, &Proxy{Kind: "xray", Protocol: "ss"}); err != nil {
+		t.Fatalf("parsed shadowsocks node did not produce a valid outbound: %v", err)
+	}
+}
+
+func TestParseSingBoxProxyNodesCombinesOutboundsAndEndpoints(t *testing.T) {
+	privateKey := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("a", 32)))
+	publicKey := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("b", 32)))
+	raw := fmt.Sprintf(`{
+  "outbounds": [{"type":"direct","tag":"direct"}],
+  "endpoints": [{"type":"wireguard","tag":"wg","address":["172.16.0.2/32"],"private_key":%q,"peers":[{"address":"wg.example.com","port":51820,"public_key":%q}]}]
+}`, privateKey, publicKey)
+	nodes := parseProxyNodeLines(raw)
+	if len(nodes) != 1 || nodes[0].Err != "" || nodes[0].Protocol != "wireguard" {
+		t.Fatalf("unexpected sing-box endpoint parse result: %#v", nodes)
+	}
+	if _, err := buildSingBoxRuntimeSpec(nodes[0].Raw, &Proxy{Kind: "xray", Protocol: "wireguard"}); err != nil {
+		t.Fatalf("wireguard endpoint did not produce a valid runtime spec: %v", err)
+	}
+}
+
 func TestParseProxyNodeLinesSupportsClashYAML(t *testing.T) {
 	raw := `
 proxies:
@@ -304,16 +416,23 @@ proxies:
     port: 1080
     username: user
     password: pass
-  - name: unsupported node
+  - name: hysteria2 node
     type: hysteria2
     server: hy.example.com
     port: 443
     password: secret-should-not-leak
+  - name: hysteria node
+    type: hysteria
+    server: hy1.example.com
+    port: 8443
+    auth-str: hysteria-secret
+    up: 20
+    down: 100
 `
 
 	nodes := parseProxyNodeLines(raw)
-	if len(nodes) != 4 {
-		t.Fatalf("expected 4 parsed clash nodes, got %d: %#v", len(nodes), nodes)
+	if len(nodes) != 5 {
+		t.Fatalf("expected 5 parsed clash nodes, got %d: %#v", len(nodes), nodes)
 	}
 	if nodes[0].Name != "ss node" || nodes[0].Protocol != "ss" || nodes[0].Kind != "xray" {
 		t.Fatalf("unexpected ss node: %#v", nodes[0])
@@ -330,11 +449,17 @@ proxies:
 	if nodes[2].Kind != "standard" || nodes[2].Protocol != "socks5" || nodes[2].Username != "user" || nodes[2].Password != "pass" {
 		t.Fatalf("unexpected socks node: %#v", nodes[2])
 	}
-	if nodes[3].Err == "" {
-		t.Fatalf("expected unsupported node error")
+	if nodes[3].Err != "" || nodes[3].Protocol != "hysteria2" || nodes[3].Kind != "xray" {
+		t.Fatalf("unexpected hysteria2 node: %#v", nodes[3])
 	}
-	if strings.Contains(nodes[3].Err, "secret-should-not-leak") {
-		t.Fatalf("unsupported node error leaked secret: %q", nodes[3].Err)
+	if _, err := buildSingBoxRuntimeSpec(nodes[3].Raw, &Proxy{Kind: "xray", Protocol: "hysteria2"}); err != nil {
+		t.Fatalf("hysteria2 clash node did not produce a valid sing-box outbound: %v", err)
+	}
+	if nodes[4].Err != "" || nodes[4].Protocol != "hysteria" || nodes[4].Kind != "xray" {
+		t.Fatalf("unexpected hysteria node: %#v", nodes[4])
+	}
+	if _, err := buildSingBoxRuntimeSpec(nodes[4].Raw, &Proxy{Kind: "xray", Protocol: "hysteria"}); err != nil {
+		t.Fatalf("hysteria clash node did not produce a valid sing-box outbound: %v", err)
 	}
 }
 
@@ -343,12 +468,13 @@ func TestParseProxyNodeLinesSupportsSingBoxJSON(t *testing.T) {
   "outbounds": [
     {"type":"direct","tag":"direct"},
     {"type":"socks","tag":"local socks","server":"socks.example.com","server_port":1080,"username":"user","password":"pass"},
-    {"type":"vless","tag":"vless reality","server":"vless.example.com","server_port":443,"uuid":"11111111-1111-1111-1111-111111111111","flow":"xtls-rprx-vision","transport":{"type":"grpc","service_name":"svc"},"tls":{"enabled":true,"server_name":"sni.example.com","reality":{"enabled":true,"public_key":"pub","short_id":"abc"}}}
+    {"type":"vless","tag":"vless reality","server":"vless.example.com","server_port":443,"uuid":"11111111-1111-1111-1111-111111111111","flow":"xtls-rprx-vision","transport":{"type":"grpc","service_name":"svc"},"tls":{"enabled":true,"server_name":"sni.example.com","reality":{"enabled":true,"public_key":"pub","short_id":"abc"}}},
+    {"type":"tuic","tag":"tuic node","server":"tuic.example.com","server_port":443,"uuid":"22222222-2222-2222-2222-222222222222","password":"tuic-secret","congestion_control":"bbr","tls":{"enabled":true,"server_name":"tuic-sni.example.com"}}
   ]
 }`
 	nodes := parseProxyNodeLines(raw)
-	if len(nodes) != 2 {
-		t.Fatalf("expected 2 supported sing-box nodes, got %#v", nodes)
+	if len(nodes) != 3 {
+		t.Fatalf("expected 3 supported sing-box nodes, got %#v", nodes)
 	}
 	if nodes[0].Name != "local socks" || nodes[0].Kind != "standard" || nodes[0].Protocol != "socks5" {
 		t.Fatalf("unexpected socks node: %#v", nodes[0])
@@ -358,6 +484,12 @@ func TestParseProxyNodeLinesSupportsSingBoxJSON(t *testing.T) {
 	}
 	if _, err := buildXrayOutbound(nodes[1].Raw, &Proxy{Kind: "xray"}); err != nil {
 		t.Fatalf("sing-box vless node did not produce a valid xray outbound: %v", err)
+	}
+	if nodes[2].Protocol != "tuic" || nodes[2].Kind != "xray" || nodes[2].Err != "" {
+		t.Fatalf("unexpected tuic node: %#v", nodes[2])
+	}
+	if _, err := buildSingBoxRuntimeSpec(nodes[2].Raw, &Proxy{Kind: "xray", Protocol: "tuic"}); err != nil {
+		t.Fatalf("sing-box tuic node did not produce a valid runtime spec: %v", err)
 	}
 }
 
@@ -430,7 +562,7 @@ func TestUserResourceBulkAssignmentHasHardLimit(t *testing.T) {
 	}
 }
 
-func TestGetProxyLooksUpByIDAndRedactsPublicProxy(t *testing.T) {
+func TestGetProxyLooksUpByIDAndRedactsAnotherUsersPublicProxy(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("create sqlmock: %v", err)
@@ -443,7 +575,7 @@ func TestGetProxyLooksUpByIDAndRedactsPublicProxy(t *testing.T) {
 		"username", "password", "has_auth", "status", "expires_at", "fallback_mode",
 		"backup_proxy_id", "expiry_warn_days", "extra", "created_at", "updated_at", "account_count",
 	}).AddRow(
-		int64(1501), nil, true, "xray", "public-node", "socks5", "127.0.0.1", 1080,
+		int64(1501), int64(77), true, "xray", "public-node", "socks5", "203.0.113.10", 1080,
 		"proxy-user", "proxy-pass", true, StatusActive, nil, FallbackModeNone,
 		nil, 7, `{"raw":"vless://secret","region":"us"}`, now, now, int64(0),
 	)
@@ -458,6 +590,9 @@ func TestGetProxyLooksUpByIDAndRedactsPublicProxy(t *testing.T) {
 	}
 	if item["username"] != "" || item["password"] != "" {
 		t.Fatalf("public proxy credentials were not redacted: %#v", item)
+	}
+	if item["host"] != "" || item["port"] != nil || item["owner_user_id"] != nil || item["details_hidden"] != true {
+		t.Fatalf("foreign public proxy endpoint was not hidden: %#v", item)
 	}
 	extra, ok := item["extra"].(map[string]any)
 	if !ok {

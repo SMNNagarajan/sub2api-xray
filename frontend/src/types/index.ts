@@ -744,7 +744,21 @@ export type AccountPlatform = 'anthropic' | 'openai' | 'gemini' | 'antigravity' 
 export type AccountType = 'oauth' | 'setup-token' | 'apikey' | 'upstream' | 'bedrock' | 'service_account'
 export type OAuthAddMethod = 'oauth' | 'setup-token'
 export type ProxyKind = 'standard' | 'xray'
-export type ProxyProtocol = 'http' | 'https' | 'socks5' | 'socks5h' | 'vmess' | 'vless' | 'trojan' | 'ss'
+export type ProxyProtocol =
+  | 'http'
+  | 'https'
+  | 'socks5'
+  | 'socks5h'
+  | 'vmess'
+  | 'vless'
+  | 'trojan'
+  | 'ss'
+  | 'hysteria'
+  | 'hysteria2'
+  | 'tuic'
+  | 'anytls'
+  | 'naive'
+  | 'wireguard'
 
 // Claude Model type (returned by /v1/models and account models API)
 export interface ClaudeModel {
@@ -758,6 +772,8 @@ export interface Proxy {
   id: number
   owner_user_id?: number | null
   is_public?: boolean
+  is_owned?: boolean
+  details_hidden?: boolean
   name: string
   kind: ProxyKind
   protocol: ProxyProtocol

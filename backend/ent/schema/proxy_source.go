@@ -38,6 +38,9 @@ func (ProxySource) Fields() []ent.Field {
 		field.String("subscription_url").
 			SchemaType(map[string]string{dialect.Postgres: "text"}).
 			NotEmpty(),
+		field.Bool("is_public").
+			Default(false).
+			Comment("Whether proxies imported from this source are selectable by all users."),
 		field.Int("refresh_interval_minutes").
 			Default(1440),
 		field.Time("last_synced_at").

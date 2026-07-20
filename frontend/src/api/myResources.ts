@@ -1,4 +1,5 @@
 import { apiClient } from './client'
+import type { ProxyQualityCheckResult } from '@/types'
 
 export interface ResourcePage<T = Record<string, any>> {
   items: T[]
@@ -25,6 +26,7 @@ export interface ResourceListParams {
   timezone?: string
   sort_by?: string
   sort_order?: 'asc' | 'desc' | string
+  owned_only?: boolean
 }
 
 export interface AssignSubscriptionPayload {
@@ -66,6 +68,17 @@ export interface UserOAuthCredentialsResult {
 }
 
 export type ResourceItem = Record<string, any>
+
+export interface UserProxyTestResult {
+  success: boolean
+  message: string
+  latency_ms?: number
+  ip_address?: string
+  city?: string
+  region?: string
+  country?: string
+  country_code?: string
+}
 
 const getPage = async (url: string, params?: ResourceListParams): Promise<ResourcePage> => {
   const { data } = await apiClient.get<ResourcePage>(url, { params })
@@ -116,10 +129,10 @@ export const myResourcesApi = {
     create: async (payload: ResourceItem) => (await apiClient.post<ResourceItem>('/my/proxies', payload)).data,
     update: async (id: number, payload: ResourceItem) => (await apiClient.put<ResourceItem>(`/my/proxies/${id}`, payload)).data,
     delete: async (id: number) => (await apiClient.delete(`/my/proxies/${id}`)).data,
-    test: async (id: number) => (await apiClient.post(`/my/proxies/${id}/test`)).data,
-    qualityCheck: async (id: number) => (await apiClient.post(`/my/proxies/${id}/quality-check`)).data,
+    test: async (id: number) => (await apiClient.post<UserProxyTestResult>(`/my/proxies/${id}/test`)).data,
+    qualityCheck: async (id: number) => (await apiClient.post<ProxyQualityCheckResult>(`/my/proxies/${id}/quality-check`)).data,
     export: async (params?: { ids?: number[] }) => (await apiClient.get('/my/proxies/export', { params: { ...params, ids: params?.ids?.join(',') } })).data,
-    importNodes: async (payload: { name_prefix?: string; content: string }) => (await apiClient.post('/my/proxies/import', payload)).data,
+    importNodes: async (payload: { name_prefix?: string; content: string; is_public?: boolean }) => (await apiClient.post('/my/proxies/import', payload)).data,
     sources: {
       list: (params?: ResourceListParams) => getPage('/my/proxies/sources', params),
       create: async (payload: ResourceItem) => (await apiClient.post<ResourceItem>('/my/proxies/sources', payload)).data,

@@ -609,6 +609,7 @@ type adminServiceImpl struct {
 	billingCacheService  *BillingCacheService
 	proxyProber          ProxyExitInfoProber
 	proxyLatencyCache    ProxyLatencyCache
+	proxyProbeResolver   ProxyProbeURLResolver
 	authCacheInvalidator APIKeyAuthCacheInvalidator
 	db                   *sql.DB
 	entClient            *dbent.Client // 用于开启数据库事务
@@ -666,6 +667,7 @@ func NewAdminService(
 		billingCacheService:  billingCacheService,
 		proxyProber:          proxyProber,
 		proxyLatencyCache:    proxyLatencyCache,
+		proxyProbeResolver:   DefaultProxyProbeRuntimeResolver(),
 		authCacheInvalidator: authCacheInvalidator,
 		db:                   db,
 		entClient:            entClient,

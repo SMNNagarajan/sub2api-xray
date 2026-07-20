@@ -6,20 +6,23 @@
     @close="emit('close')"
   >
     <form id="my-proxy-editor-form" class="space-y-5" @submit.prevent="submit">
-      <div v-if="!proxy">
-        <label class="input-label">{{ mr('proxyEditor.creationMode') }}</label>
-        <div class="grid h-12 grid-cols-2 rounded-lg bg-gray-100 p-1 dark:bg-dark-900">
-          <button
-            v-for="option in creationModeOptions"
-            :key="option.value"
-            type="button"
-            :data-test="`proxy-create-mode-${option.value}`"
-            :class="segmentClass(createMode === option.value)"
-            @click="createMode = option.value"
-          >
-            {{ option.label }}
-          </button>
-        </div>
+      <div v-if="!proxy" class="mb-6 flex items-center border-b border-gray-200 dark:border-dark-600">
+        <button
+          v-for="option in creationModeOptions"
+          :key="option.value"
+          type="button"
+          :data-test="`proxy-create-mode-${option.value}`"
+          :class="[
+            '-mb-px border-b-2 px-4 py-2 text-sm font-medium transition-colors',
+            createMode === option.value
+              ? 'border-primary-500 text-primary-600 dark:text-primary-400'
+              : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300',
+          ]"
+          @click="createMode = option.value"
+        >
+          <Icon :name="option.value === 'standard' ? 'plus' : 'upload'" size="sm" class="mr-1.5 inline" />
+          {{ option.label }}
+        </button>
       </div>
 
       <template v-if="createMode === 'standard'">
@@ -54,27 +57,35 @@
               <input v-model.number="form.port" class="input" type="number" min="1" max="65535" required />
             </div>
           </div>
-          <div class="grid gap-3 sm:grid-cols-2">
-            <div>
-              <label class="input-label">{{ mr('fields.username') }}</label>
-              <input
-                v-model.trim="form.username"
-                class="input"
-                autocomplete="off"
-                :placeholder="proxy ? mr('fields.leaveBlankToKeep') : ''"
-                @input="usernameDirty = true"
-              />
-            </div>
-            <div>
-              <label class="input-label">{{ mr('fields.password') }}</label>
+          <div>
+            <label class="input-label">{{ mr('fields.username') }}</label>
+            <input
+              v-model.trim="form.username"
+              class="input"
+              autocomplete="off"
+              :placeholder="proxy ? mr('fields.leaveBlankToKeep') : ''"
+              @input="usernameDirty = true"
+            />
+          </div>
+          <div>
+            <label class="input-label">{{ mr('fields.password') }}</label>
+            <div class="relative">
               <input
                 v-model="form.password"
-                class="input"
-                type="password"
+                class="input pr-10"
+                :type="passwordVisible ? 'text' : 'password'"
                 autocomplete="new-password"
                 :placeholder="proxy ? mr('fields.leaveBlankToKeep') : ''"
                 @input="passwordDirty = true"
               />
+              <button
+                type="button"
+                class="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                :title="passwordVisible ? t('admin.proxies.hideCredentials') : t('admin.proxies.showCredentials')"
+                @click="passwordVisible = !passwordVisible"
+              >
+                <Icon :name="passwordVisible ? 'eyeOff' : 'eye'" size="md" />
+              </button>
             </div>
           </div>
         </template>
@@ -127,30 +138,10 @@
           </div>
         </template>
 
-        <template v-if="inputMode === 'direct' || inputMode === 'xray'">
-          <div v-if="proxy">
-            <label class="input-label">{{ mr('fields.status') }}</label>
-            <Select v-model="form.status" :options="statusOptions" :searchable="false" />
-          </div>
-          <div>
-            <label class="input-label">{{ mr('fields.fallbackMode') }}</label>
-            <Select v-model="form.fallbackMode" :options="fallbackOptions" :searchable="false" />
-          </div>
-          <div v-if="form.fallbackMode === 'proxy'">
-            <label class="input-label">{{ mr('proxyEditor.backupProxy') }}</label>
-            <Select v-model="form.backupProxyId" :options="backupProxyOptions" searchable />
-          </div>
-          <div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_9rem]">
-            <div>
-              <label class="input-label">{{ mr('fields.expiresAt') }}</label>
-              <input v-model="form.expiresAt" class="input" type="datetime-local" />
-            </div>
-            <div>
-              <label class="input-label">{{ mr('fields.expiryWarnDays') }}</label>
-              <input v-model.number="form.expiryWarnDays" class="input" type="number" min="0" />
-            </div>
-          </div>
-        </template>
+        <div v-if="proxy && (inputMode === 'direct' || inputMode === 'xray')">
+          <label class="input-label">{{ mr('fields.status') }}</label>
+          <Select v-model="form.status" :options="statusOptions" :searchable="false" />
+        </div>
       </template>
 
       <template v-else>
@@ -165,11 +156,61 @@
             spellcheck="false"
           ></textarea>
         </div>
-        <div class="grid grid-cols-4 rounded-lg border border-gray-200 bg-gray-50 py-3 text-center dark:border-dark-700 dark:bg-dark-900">
-          <div v-for="stat in batchStatsDisplay" :key="stat.key" :data-test="`proxy-stat-${stat.key}`" class="min-w-0 px-1">
-            <div class="truncate text-xs text-gray-500 dark:text-dark-300">{{ stat.label }}</div>
-            <div :class="['mt-1 text-base font-semibold', stat.class]">{{ stat.value }}</div>
+        <div v-if="batchStats.total > 0" class="rounded-lg bg-gray-50 p-4 dark:bg-dark-700">
+          <div class="grid grid-cols-4 gap-2 text-center">
+            <div v-for="stat in batchStatsDisplay" :key="stat.key" :data-test="`proxy-stat-${stat.key}`" class="min-w-0 px-1">
+              <div class="truncate text-xs text-gray-500 dark:text-dark-300">{{ stat.label }}</div>
+              <div :class="['mt-1 text-base font-semibold', stat.class]">{{ stat.value }}</div>
+            </div>
           </div>
+        </div>
+      </template>
+
+      <label class="flex cursor-pointer items-center gap-2">
+        <input
+          v-model="form.isPublic"
+          type="checkbox"
+          class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          data-test="proxy-is-public"
+        />
+        <span class="text-sm text-gray-700 dark:text-gray-200">{{ mr('fields.publicForAllUsers') }}</span>
+      </label>
+
+      <template v-if="createMode === 'standard' && (inputMode === 'direct' || inputMode === 'xray')">
+        <div>
+          <label class="input-label">{{ mr('fields.expiresAt') }}</label>
+          <div class="mb-2 flex flex-wrap gap-2">
+            <button
+              v-for="days in EXPIRY_PRESETS"
+              :key="days"
+              type="button"
+              class="btn btn-sm"
+              :class="expiresDays === days ? 'btn-primary' : 'btn-secondary'"
+              @click="expiresDays = days"
+            >
+              {{ t('admin.proxies.nDays', { days }) }}
+            </button>
+          </div>
+          <input
+            v-model.number="expiresDays"
+            type="number"
+            min="0"
+            class="input mb-2"
+            :placeholder="t('admin.proxies.expiryDaysPlaceholder')"
+          />
+          <input v-model="form.expiresAt" class="input" type="date" />
+        </div>
+        <div>
+          <label class="input-label">{{ mr('fields.expiryWarnDays') }}</label>
+          <input v-model.number="form.expiryWarnDays" class="input" type="number" min="0" />
+        </div>
+        <div>
+          <label class="input-label">{{ mr('fields.fallbackMode') }}</label>
+          <Select v-model="form.fallbackMode" :options="fallbackOptions" :searchable="false" />
+        </div>
+        <div v-if="form.fallbackMode === 'proxy'">
+          <label class="input-label">{{ mr('proxyEditor.backupProxy') }}</label>
+          <Select v-model="form.backupProxyId" :options="backupProxyOptions" searchable />
         </div>
       </template>
 
@@ -194,12 +235,14 @@ import { computed, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { myResourcesApi, type ResourceItem } from '@/api/myResources'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import Icon from '@/components/icons/Icon.vue'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 
 type CreateMode = 'standard' | 'batch'
 type InputMode = 'direct' | 'xray' | 'source' | 'config'
+const EXPIRY_PRESETS = [30, 90, 180, 365] as const
 
 const props = withDefaults(defineProps<{
   show: boolean
@@ -227,6 +270,7 @@ const batchInput = ref('')
 const usernameDirty = ref(false)
 const passwordDirty = ref(false)
 const nodeContentDirty = ref(false)
+const passwordVisible = ref(false)
 const availableProxies = ref<ResourceItem[]>([])
 
 const form = reactive({
@@ -244,6 +288,7 @@ const form = reactive({
   nodeContent: '',
   subscriptionUrl: '',
   refreshIntervalMinutes: 1440,
+  isPublic: false,
 })
 
 const creationModeOptions = computed(() => [
@@ -274,8 +319,8 @@ const fallbackOptions = computed<SelectOption[]>(() => [
 const backupProxyOptions = computed<SelectOption[]>(() => [
   { value: 0, label: mr('proxyEditor.selectBackupProxy') },
   ...availableProxies.value
-    .filter(item => item.owner_user_id != null && Number(item.id) !== Number(props.proxy?.id))
-    .map(item => ({ value: Number(item.id), label: `${String(item.name || '-')}: ${String(item.host || '-')}:${Number(item.port || 0)}` })),
+    .filter(item => Number(item.id) !== Number(props.proxy?.id) && (item.is_owned === true || item.is_public === true))
+    .map(item => ({ value: Number(item.id), label: proxyOptionLabel(item) })),
 ])
 
 const batchStats = computed(() => {
@@ -286,7 +331,7 @@ const batchStats = computed(() => {
   let duplicate = 0
   for (const line of lines) {
     const normalized = line.toLowerCase()
-    if (!/^(https?|socks(?:5h?)?|vmess|vless|trojan|ss):\/\//.test(normalized)) {
+    if (!/^(https?|socks(?:5h?)?|vmess|vless|trojan|ss|hysteria|hy2|hysteria2|tuic|anytls|naive(?:\+https|\+quic)?|wireguard|wg):\/\//.test(normalized)) {
       invalid++
       continue
     }
@@ -319,21 +364,40 @@ const submitLabel = computed(() => {
   return createMode.value === 'batch' ? mr('proxyEditor.batchCreate') : t('common.create')
 })
 
-function segmentClass(active: boolean): string[] {
-  return [
-    'rounded-md px-3 text-sm font-medium transition-colors',
-    active
-      ? 'bg-white text-primary-600 shadow-sm dark:bg-dark-700 dark:text-primary-300'
-      : 'text-gray-600 hover:text-gray-900 dark:text-dark-300 dark:hover:text-white',
-  ]
+const expiryBaseDate = computed(() => toDateInput(props.proxy?.created_at) || toDateInput(new Date()))
+const expiresDays = computed<number | null>({
+  get: () => daysBetween(expiryBaseDate.value, form.expiresAt),
+  set: days => {
+    form.expiresAt = addDays(expiryBaseDate.value, days)
+  },
+})
+
+function proxyOptionLabel(item: ResourceItem): string {
+  const base = `${String(item.name || '-')} / ${String(item.protocol || '-').toUpperCase()}`
+  if (item.details_hidden) return `${base} / ${mr('states.publicDetailsHidden')}`
+  return `${base} / ${String(item.host || '-')}:${Number(item.port || 0)}`
 }
 
-function toDateTimeLocal(value: unknown): string {
+function toDateInput(value: unknown): string {
   if (!value) return ''
-  const date = new Date(String(value))
+  const numeric = typeof value === 'number' ? value : Number.NaN
+  const date = new Date(Number.isFinite(numeric) && numeric < 1_000_000_000_000 ? numeric * 1000 : String(value))
   if (Number.isNaN(date.getTime())) return ''
   const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
-  return local.toISOString().slice(0, 16)
+  return local.toISOString().slice(0, 10)
+}
+
+function daysBetween(base: string, value: string): number | null {
+  if (!base || !value) return null
+  const difference = new Date(`${value}T00:00:00`).getTime() - new Date(`${base}T00:00:00`).getTime()
+  return Math.max(0, Math.round(difference / 86_400_000))
+}
+
+function addDays(base: string, days: number | null): string {
+  if (days == null || !Number.isFinite(Number(days)) || Number(days) <= 0) return ''
+  const date = new Date(`${base}T00:00:00`)
+  date.setDate(date.getDate() + Number(days))
+  return toDateInput(date)
 }
 
 function resetForm(): void {
@@ -344,6 +408,7 @@ function resetForm(): void {
   usernameDirty.value = false
   passwordDirty.value = false
   nodeContentDirty.value = false
+  passwordVisible.value = false
   form.name = String(props.proxy?.name || '')
   form.protocol = String(props.proxy?.protocol || 'socks5')
   form.host = String(props.proxy?.host || '')
@@ -353,11 +418,12 @@ function resetForm(): void {
   form.status = String(props.proxy?.status || 'active')
   form.fallbackMode = String(props.proxy?.fallback_mode || 'none')
   form.backupProxyId = Number(props.proxy?.backup_proxy_id || 0)
-  form.expiresAt = toDateTimeLocal(props.proxy?.expires_at)
+  form.expiresAt = toDateInput(props.proxy?.expires_at)
   form.expiryWarnDays = Number(props.proxy?.expiry_warn_days ?? 7)
   form.nodeContent = ''
   form.subscriptionUrl = ''
   form.refreshIntervalMinutes = 1440
+  form.isPublic = Boolean(props.proxy?.is_public)
 }
 
 async function loadBackupProxies(): Promise<void> {
@@ -370,7 +436,11 @@ async function loadBackupProxies(): Promise<void> {
 }
 
 async function importContent(content: string, namePrefix?: string): Promise<number> {
-  const result = await myResourcesApi.proxies.importNodes({ name_prefix: namePrefix || undefined, content }) as ResourceItem
+  const result = await myResourcesApi.proxies.importNodes({
+    name_prefix: namePrefix || undefined,
+    content,
+    is_public: form.isPublic,
+  }) as ResourceItem
   const created = Array.isArray(result?.created) ? result.created as ResourceItem[] : []
   const errors = Array.isArray(result?.errors) ? result.errors.map(String) : []
   if (created.length === 1 && namePrefix?.trim() && String(created[0].name || '') !== namePrefix.trim()) {
@@ -399,9 +469,10 @@ async function submit(): Promise<void> {
         name: form.name,
         subscription_url: form.subscriptionUrl,
         refresh_interval_minutes: Number(form.refreshIntervalMinutes),
+        is_public: form.isPublic,
       })
       const result = await myResourcesApi.proxies.sources.sync(Number(source.id)) as ResourceItem
-      importedCount = Array.isArray(result?.imported?.created) ? result.imported.created.length : 0
+      importedCount = Number(result?.created_count || result?.imported_count || 0)
     } else {
       const payload: ResourceItem = {
         name: form.name,
@@ -414,6 +485,7 @@ async function submit(): Promise<void> {
         backup_proxy_id: form.fallbackMode === 'proxy' && form.backupProxyId > 0 ? Number(form.backupProxyId) : null,
         expires_at: form.expiresAt ? new Date(form.expiresAt).toISOString() : null,
         expiry_warn_days: Number(form.expiryWarnDays),
+        is_public: form.isPublic,
       }
       if (!props.proxy || usernameDirty.value) payload.username = form.username
       if (!props.proxy || passwordDirty.value) payload.password = form.password

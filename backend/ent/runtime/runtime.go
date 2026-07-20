@@ -1648,18 +1648,22 @@ func init() {
 	proxysourceDescSubscriptionURL := proxysourceFields[2].Descriptor()
 	// proxysource.SubscriptionURLValidator is a validator for the "subscription_url" field. It is called by the builders before save.
 	proxysource.SubscriptionURLValidator = proxysourceDescSubscriptionURL.Validators[0].(func(string) error)
+	// proxysourceDescIsPublic is the schema descriptor for is_public field.
+	proxysourceDescIsPublic := proxysourceFields[3].Descriptor()
+	// proxysource.DefaultIsPublic holds the default value on creation for the is_public field.
+	proxysource.DefaultIsPublic = proxysourceDescIsPublic.Default.(bool)
 	// proxysourceDescRefreshIntervalMinutes is the schema descriptor for refresh_interval_minutes field.
-	proxysourceDescRefreshIntervalMinutes := proxysourceFields[3].Descriptor()
+	proxysourceDescRefreshIntervalMinutes := proxysourceFields[4].Descriptor()
 	// proxysource.DefaultRefreshIntervalMinutes holds the default value on creation for the refresh_interval_minutes field.
 	proxysource.DefaultRefreshIntervalMinutes = proxysourceDescRefreshIntervalMinutes.Default.(int)
 	// proxysourceDescLastSyncStatus is the schema descriptor for last_sync_status field.
-	proxysourceDescLastSyncStatus := proxysourceFields[5].Descriptor()
+	proxysourceDescLastSyncStatus := proxysourceFields[6].Descriptor()
 	// proxysource.DefaultLastSyncStatus holds the default value on creation for the last_sync_status field.
 	proxysource.DefaultLastSyncStatus = proxysourceDescLastSyncStatus.Default.(string)
 	// proxysource.LastSyncStatusValidator is a validator for the "last_sync_status" field. It is called by the builders before save.
 	proxysource.LastSyncStatusValidator = proxysourceDescLastSyncStatus.Validators[0].(func(string) error)
 	// proxysourceDescLastImportedCount is the schema descriptor for last_imported_count field.
-	proxysourceDescLastImportedCount := proxysourceFields[7].Descriptor()
+	proxysourceDescLastImportedCount := proxysourceFields[8].Descriptor()
 	// proxysource.DefaultLastImportedCount holds the default value on creation for the last_imported_count field.
 	proxysource.DefaultLastImportedCount = proxysourceDescLastImportedCount.Default.(int)
 	redeemcodeFields := schema.RedeemCode{}.Fields()

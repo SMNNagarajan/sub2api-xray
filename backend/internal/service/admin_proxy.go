@@ -13,6 +13,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/util/httputil"
+	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
 )
 
 // Proxy management implementations
@@ -214,6 +215,9 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	if err := DefaultXrayRuntimeManager().Stop(id); err != nil {
 		return nil, fmt.Errorf("stop previous xray runtime: %w", err)
 	}
+	if err := DefaultSingBoxRuntimeManager().Stop(id); err != nil {
+		return nil, fmt.Errorf("stop previous sing-box runtime: %w", err)
+	}
 	if err := s.proxyRepo.Update(ctx, proxy); err != nil {
 		return nil, err
 	}
@@ -230,7 +234,10 @@ func normalizeAdminProxyKind(kind string) string {
 
 func validateAdminProxyMode(kind, protocol string, extra map[string]any) error {
 	standardProtocols := map[string]struct{}{"http": {}, "https": {}, "socks5": {}, "socks5h": {}}
-	xrayProtocols := map[string]struct{}{"vmess": {}, "vless": {}, "trojan": {}, "ss": {}}
+	xrayProtocols := map[string]struct{}{
+		"vmess": {}, "vless": {}, "trojan": {}, "ss": {},
+		"hysteria": {}, "hysteria2": {}, "tuic": {}, "anytls": {}, "naive": {}, "wireguard": {},
+	}
 
 	switch kind {
 	case "standard":
@@ -239,11 +246,19 @@ func validateAdminProxyMode(kind, protocol string, extra map[string]any) error {
 		}
 	case "xray":
 		if _, ok := xrayProtocols[protocol]; !ok {
-			return infraerrors.BadRequest("PROXY_PROTOCOL_INVALID", "xray proxy protocol must be vmess, vless, trojan, or ss")
+			return infraerrors.BadRequest("PROXY_PROTOCOL_INVALID", "xray proxy protocol is not supported")
 		}
 		raw, _ := extra["raw"].(string)
 		if strings.TrimSpace(raw) == "" {
 			return infraerrors.BadRequest("PROXY_XRAY_RAW_REQUIRED", "xray proxy requires extra.raw node URI")
+		}
+		candidate := &Proxy{Kind: kind, Protocol: protocol, Extra: extra}
+		if requiresSingBoxRuntime(candidate) {
+			if _, err := buildSingBoxRuntimeSpec(raw, candidate); err != nil {
+				return infraerrors.BadRequest("PROXY_XRAY_RAW_INVALID", "xray proxy contains an invalid sing-box node URI")
+			}
+		} else if _, err := buildXrayOutbound(raw, candidate); err != nil {
+			return infraerrors.BadRequest("PROXY_XRAY_RAW_INVALID", "xray proxy contains an invalid node URI")
 		}
 	default:
 		return infraerrors.BadRequest("PROXY_KIND_INVALID", "proxy kind must be standard or xray")
@@ -288,6 +303,9 @@ func (s *adminServiceImpl) DeleteProxy(ctx context.Context, id int64) error {
 	if err := DefaultXrayRuntimeManager().Stop(id); err != nil {
 		return err
 	}
+	if err := DefaultSingBoxRuntimeManager().Stop(id); err != nil {
+		return err
+	}
 	return s.proxyRepo.Delete(ctx, id)
 }
 
@@ -314,6 +332,13 @@ func (s *adminServiceImpl) BatchDeleteProxies(ctx context.Context, ids []int64) 
 			continue
 		}
 		if err := DefaultXrayRuntimeManager().Stop(id); err != nil {
+			result.Skipped = append(result.Skipped, ProxyBatchDeleteSkipped{
+				ID:     id,
+				Reason: err.Error(),
+			})
+			continue
+		}
+		if err := DefaultSingBoxRuntimeManager().Stop(id); err != nil {
 			result.Skipped = append(result.Skipped, ProxyBatchDeleteSkipped{
 				ID:     id,
 				Reason: err.Error(),
@@ -347,7 +372,17 @@ func (s *adminServiceImpl) TestProxy(ctx context.Context, id int64) (*ProxyTestR
 		return nil, err
 	}
 
-	proxyURL := proxy.URL()
+	proxyURL, cleanup, resolveErr := resolveProxyProbeURL(ctx, s.proxyProbeResolver, proxy)
+	if resolveErr != nil {
+		message := logredact.RedactText(resolveErr.Error())
+		s.saveProxyLatency(ctx, id, &ProxyLatencyInfo{
+			Success:   false,
+			Message:   message,
+			UpdatedAt: time.Now(),
+		})
+		return &ProxyTestResult{Success: false, Message: message}, nil
+	}
+	defer cleanup()
 	exitInfo, latencyMs, err := s.proxyProber.ProbeProxy(ctx, proxyURL)
 	if err != nil {
 		s.saveProxyLatency(ctx, id, &ProxyLatencyInfo{
@@ -399,7 +434,6 @@ func (s *adminServiceImpl) CheckProxyQuality(ctx context.Context, id int64) (*Pr
 		Items:     make([]ProxyQualityCheckItem, 0, len(proxyQualityTargets)+1),
 	}
 
-	proxyURL := proxy.URL()
 	if s.proxyProber == nil {
 		result.Items = append(result.Items, ProxyQualityCheckItem{
 			Target:  "base_connectivity",
@@ -411,6 +445,19 @@ func (s *adminServiceImpl) CheckProxyQuality(ctx context.Context, id int64) (*Pr
 		s.saveProxyQualitySnapshot(ctx, id, result, nil)
 		return result, nil
 	}
+	proxyURL, cleanup, resolveErr := resolveProxyProbeURL(ctx, s.proxyProbeResolver, proxy)
+	if resolveErr != nil {
+		result.Items = append(result.Items, ProxyQualityCheckItem{
+			Target:  "base_connectivity",
+			Status:  "fail",
+			Message: logredact.RedactText(resolveErr.Error()),
+		})
+		result.FailedCount++
+		finalizeProxyQualityResult(result)
+		s.saveProxyQualitySnapshot(ctx, id, result, nil)
+		return result, nil
+	}
+	defer cleanup()
 
 	exitInfo, latencyMs, err := s.proxyProber.ProbeProxy(ctx, proxyURL)
 	if err != nil {
@@ -654,7 +701,17 @@ func (s *adminServiceImpl) probeProxyLatency(ctx context.Context, proxy *Proxy) 
 	if s.proxyProber == nil || proxy == nil {
 		return
 	}
-	exitInfo, latencyMs, err := s.proxyProber.ProbeProxy(ctx, proxy.URL())
+	proxyURL, cleanup, resolveErr := resolveProxyProbeURL(ctx, s.proxyProbeResolver, proxy)
+	if resolveErr != nil {
+		s.saveProxyLatency(ctx, proxy.ID, &ProxyLatencyInfo{
+			Success:   false,
+			Message:   logredact.RedactText(resolveErr.Error()),
+			UpdatedAt: time.Now(),
+		})
+		return
+	}
+	defer cleanup()
+	exitInfo, latencyMs, err := s.proxyProber.ProbeProxy(ctx, proxyURL)
 	if err != nil {
 		s.saveProxyLatency(ctx, proxy.ID, &ProxyLatencyInfo{
 			Success:   false,

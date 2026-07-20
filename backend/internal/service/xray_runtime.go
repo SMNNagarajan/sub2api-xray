@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -24,6 +25,7 @@ const (
 	defaultXrayMaxInstances      = 64
 	defaultXrayMaxInstancesUser  = 16
 	maximumXrayConfiguredRuntime = 1024
+	xrayLegacyInsecureMarker     = "_sub2api_legacy_allow_insecure"
 )
 
 var xrayBlockedDestinationCIDRs = []string{
@@ -70,6 +72,7 @@ type XrayRuntimeManager struct {
 type xrayRuntimeInstance struct {
 	proxyID     int64
 	ownerUserID *int64
+	sourceHash  string
 	hash        string
 	port        int
 	cmd         *exec.Cmd
@@ -130,11 +133,27 @@ func (m *XrayRuntimeManager) ProxyURL(ctx context.Context, p *Proxy) (string, er
 	if err != nil {
 		return "", err
 	}
+	sourceHash := xrayInstanceHash(raw, p, outbound)
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return "", errors.New("xray runtime manager is closed")
+	}
+	if inst := m.instances[p.ID]; inst != nil && inst.sourceHash == sourceHash && inst.alive() {
+		proxyURL := localSocksURL(inst.port)
+		m.mu.Unlock()
+		return proxyURL, nil
+	}
+	m.mu.Unlock()
+
 	if p.OwnerUserID != nil {
 		if err := pinUserOwnedXrayOutbound(ctx, outbound); err != nil {
 			return "", fmt.Errorf("xray outbound endpoint is not public: %w", err)
 		}
 		outbound["tag"] = "sub2api-out"
+	}
+	if err := prepareXrayTLSCompatibility(ctx, outbound); err != nil {
+		return "", err
 	}
 	fingerprint := xrayInstanceHash(raw, p, outbound)
 
@@ -143,7 +162,7 @@ func (m *XrayRuntimeManager) ProxyURL(ctx context.Context, p *Proxy) (string, er
 	if m.closed {
 		return "", errors.New("xray runtime manager is closed")
 	}
-	if inst := m.instances[p.ID]; inst != nil && inst.hash == fingerprint && inst.alive() {
+	if inst := m.instances[p.ID]; inst != nil && inst.sourceHash == sourceHash && inst.alive() {
 		return localSocksURL(inst.port), nil
 	}
 	if old := m.instances[p.ID]; old != nil {
@@ -176,6 +195,7 @@ func (m *XrayRuntimeManager) ProxyURL(ctx context.Context, p *Proxy) (string, er
 	if err != nil {
 		return "", err
 	}
+	inst.sourceHash = sourceHash
 
 	m.instances[p.ID] = inst
 	return localSocksURL(inst.port), nil
@@ -216,10 +236,134 @@ func pinUserOwnedXrayOutbound(ctx context.Context, outbound map[string]any) erro
 			pinned++
 		}
 	}
+	if err := pinUserOwnedXrayStreamEndpoints(ctx, outbound); err != nil {
+		return err
+	}
 	if pinned == 0 {
 		return errors.New("xray outbound has no server address")
 	}
 	return nil
+}
+
+func pinUserOwnedXrayStreamEndpoints(ctx context.Context, outbound map[string]any) error {
+	stream, _ := outbound["streamSettings"].(map[string]any)
+	xhttp, _ := stream["xhttpSettings"].(map[string]any)
+	extra, _ := xhttp["extra"].(map[string]any)
+	download, _ := extra["downloadSettings"].(map[string]any)
+	if download == nil {
+		return nil
+	}
+
+	key := "address"
+	host := strings.TrimSpace(stringFromMap(download, key))
+	if host == "" {
+		key = "server"
+		host = strings.TrimSpace(stringFromMap(download, key))
+	}
+	if host == "" {
+		return nil
+	}
+	ips, err := resolveExternalHostIPs(ctx, host)
+	if err != nil {
+		return fmt.Errorf("xray xhttp download endpoint is not public: %w", err)
+	}
+	if len(ips) == 0 {
+		return fmt.Errorf("xray xhttp download endpoint %q resolved to no addresses", host)
+	}
+	if net.ParseIP(host) == nil {
+		tls, _ := download["tlsSettings"].(map[string]any)
+		if tls != nil && strings.TrimSpace(stringFromMap(tls, "serverName")) == "" {
+			tls["serverName"] = host
+		} else if tls == nil && strings.TrimSpace(stringFromMap(download, "servername")) == "" {
+			download["servername"] = host
+		}
+	}
+	download[key] = ips[0].String()
+	return nil
+}
+
+func prepareXrayTLSCompatibility(ctx context.Context, outbound map[string]any) error {
+	stream, _ := outbound["streamSettings"].(map[string]any)
+	if stream == nil {
+		return nil
+	}
+	if tlsSettings, ok := stream["tlsSettings"].(map[string]any); ok {
+		host, port := firstXrayOutboundEndpoint(outbound)
+		if err := pinLegacyInsecureCertificate(ctx, tlsSettings, host, port); err != nil {
+			return fmt.Errorf("prepare xray TLS certificate pin: %w", err)
+		}
+	}
+
+	xhttp, _ := stream["xhttpSettings"].(map[string]any)
+	extra, _ := xhttp["extra"].(map[string]any)
+	download, _ := extra["downloadSettings"].(map[string]any)
+	downloadTLS, _ := download["tlsSettings"].(map[string]any)
+	if downloadTLS == nil {
+		return nil
+	}
+	host := strings.TrimSpace(stringFromMap(download, "address"))
+	port := intFromAnyValue(download["port"])
+	if err := pinLegacyInsecureCertificate(ctx, downloadTLS, host, port); err != nil {
+		return fmt.Errorf("prepare xray xhttp download certificate pin: %w", err)
+	}
+	return nil
+}
+
+func firstXrayOutboundEndpoint(outbound map[string]any) (string, int) {
+	settings, _ := outbound["settings"].(map[string]any)
+	for _, key := range []string{"vnext", "servers"} {
+		for _, server := range mapSliceFromAny(settings[key]) {
+			if host := strings.TrimSpace(stringFromMap(server, "address")); host != "" {
+				return host, intFromAnyValue(server["port"])
+			}
+		}
+	}
+	return "", 0
+}
+
+func pinLegacyInsecureCertificate(ctx context.Context, tlsSettings map[string]any, host string, port int) error {
+	legacy, _ := tlsSettings[xrayLegacyInsecureMarker].(bool)
+	delete(tlsSettings, xrayLegacyInsecureMarker)
+	if !legacy || strings.TrimSpace(stringFromMap(tlsSettings, "pinnedPeerCertSha256")) != "" {
+		return nil
+	}
+	if strings.TrimSpace(host) == "" || port <= 0 || port > 65535 {
+		return errors.New("legacy insecure TLS endpoint is missing")
+	}
+	serverName := strings.TrimSpace(stringFromMap(tlsSettings, "serverName"))
+	if serverName == "" && net.ParseIP(host) == nil {
+		serverName = host
+	}
+	pin, err := fetchPeerCertificateSHA256(ctx, host, port, serverName)
+	if err != nil {
+		return err
+	}
+	tlsSettings["pinnedPeerCertSha256"] = pin
+	return nil
+}
+
+func fetchPeerCertificateSHA256(ctx context.Context, host string, port int, serverName string) (string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	dialCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	dialer := &tls.Dialer{
+		NetDialer: &net.Dialer{Timeout: 8 * time.Second},
+		// The resulting hash is enforced by Xray on the actual connection.
+		Config: &tls.Config{ServerName: serverName, InsecureSkipVerify: true}, // #nosec G402
+	}
+	conn, err := dialer.DialContext(dialCtx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		return "", errors.New("failed to obtain peer certificate")
+	}
+	defer func() { _ = conn.Close() }()
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok || len(tlsConn.ConnectionState().PeerCertificates) == 0 {
+		return "", errors.New("peer did not provide a certificate")
+	}
+	hash := sha256.Sum256(tlsConn.ConnectionState().PeerCertificates[0].Raw)
+	return hex.EncodeToString(hash[:]), nil
 }
 
 func preserveXrayTLSServerName(outbound map[string]any, host string) {
@@ -357,6 +501,7 @@ func cloneXrayOwnerID(value *int64) *int64 {
 }
 
 func buildXrayRuntimeConfig(port int, outbound map[string]any, blockPrivateDestinations bool) map[string]any {
+	removeXrayInternalTLSMarkers(outbound)
 	config := map[string]any{
 		"log": map[string]any{
 			"loglevel": "warning",
@@ -396,6 +541,22 @@ func buildXrayRuntimeConfig(port int, outbound map[string]any, blockPrivateDesti
 		}
 	}
 	return config
+}
+
+func removeXrayInternalTLSMarkers(outbound map[string]any) {
+	stream, _ := outbound["streamSettings"].(map[string]any)
+	if stream == nil {
+		return
+	}
+	if tlsSettings, ok := stream["tlsSettings"].(map[string]any); ok {
+		delete(tlsSettings, xrayLegacyInsecureMarker)
+	}
+	xhttp, _ := stream["xhttpSettings"].(map[string]any)
+	extra, _ := xhttp["extra"].(map[string]any)
+	download, _ := extra["downloadSettings"].(map[string]any)
+	if tlsSettings, ok := download["tlsSettings"].(map[string]any); ok {
+		delete(tlsSettings, xrayLegacyInsecureMarker)
+	}
 }
 
 func (m *XrayRuntimeManager) resolveBinary() (string, error) {
@@ -623,7 +784,11 @@ func buildVMessOutbound(raw string) (map[string]any, error) {
 	copyValue(q, "security", stringFromMap(node, "tls"))
 	copyValue(q, "sni", stringFromMap(node, "sni"))
 	copyValue(q, "fp", stringFromMap(node, "fp"))
-	return taggedOutbound("vmess", settings, xrayStreamSettings(q)), nil
+	stream, err := xrayStreamSettings(q)
+	if err != nil {
+		return nil, err
+	}
+	return taggedOutbound("vmess", settings, stream), nil
 }
 
 func buildVLESSOutbound(u *url.URL) (map[string]any, error) {
@@ -647,7 +812,11 @@ func buildVLESSOutbound(u *url.URL) (map[string]any, error) {
 			"users":   []map[string]any{user},
 		}},
 	}
-	return taggedOutbound("vless", settings, xrayStreamSettings(q)), nil
+	stream, err := xrayStreamSettings(q)
+	if err != nil {
+		return nil, err
+	}
+	return taggedOutbound("vless", settings, stream), nil
 }
 
 func buildTrojanOutbound(u *url.URL) (map[string]any, error) {
@@ -661,7 +830,11 @@ func buildTrojanOutbound(u *url.URL) (map[string]any, error) {
 		server["flow"] = flow
 	}
 	settings := map[string]any{"servers": []map[string]any{server}}
-	return taggedOutbound("trojan", settings, xrayStreamSettings(u.Query())), nil
+	stream, err := xrayStreamSettings(u.Query())
+	if err != nil {
+		return nil, err
+	}
+	return taggedOutbound("trojan", settings, stream), nil
 }
 
 func buildShadowsocksOutbound(raw string) (map[string]any, error) {
@@ -692,10 +865,13 @@ func taggedOutbound(protocol string, settings map[string]any, stream map[string]
 	return out
 }
 
-func xrayStreamSettings(q url.Values) map[string]any {
-	network := firstQuery(q, "type", "network")
+func xrayStreamSettings(q url.Values) (map[string]any, error) {
+	network := strings.ToLower(firstQuery(q, "type", "network"))
 	if network == "" {
 		network = "tcp"
+	}
+	if network == "splithttp" {
+		network = "xhttp"
 	}
 	security := firstQuery(q, "security", "tls")
 	if security == "none" {
@@ -741,13 +917,105 @@ func xrayStreamSettings(q url.Values) map[string]any {
 			httpUpgrade["host"] = host
 		}
 		out["httpupgradeSettings"] = httpUpgrade
+	case "xhttp":
+		xhttp := map[string]any{}
+		for _, key := range []string{"path", "host", "mode"} {
+			if value := firstQuery(q, key); value != "" {
+				xhttp[key] = value
+			}
+		}
+		if rawExtra := strings.TrimSpace(q.Get("extra")); rawExtra != "" {
+			var extra map[string]any
+			if err := json.Unmarshal([]byte(rawExtra), &extra); err != nil {
+				return nil, errors.New("invalid xhttp extra settings")
+			}
+			if len(extra) > 0 {
+				if err := normalizeXHTTPDownloadSettings(extra, boolString(firstQuery(q, "allowInsecure", "allow_insecure"))); err != nil {
+					return nil, err
+				}
+				xhttp["extra"] = extra
+			}
+		}
+		out["xhttpSettings"] = xhttp
 	case "tcp":
 		headerType := firstQuery(q, "headerType", "header")
 		if headerType != "" && headerType != "none" {
 			out["tcpSettings"] = map[string]any{"header": map[string]any{"type": headerType}}
 		}
 	}
-	return out
+	return out, nil
+}
+
+func normalizeXHTTPDownloadSettings(extra map[string]any, legacyInsecure bool) error {
+	raw, exists := extra["downloadSettings"]
+	if !exists || raw == nil {
+		return nil
+	}
+	compact, ok := raw.(map[string]any)
+	if !ok {
+		return errors.New("invalid xhttp download settings")
+	}
+	address := strings.TrimSpace(stringFromMap(compact, "address"))
+	if address == "" {
+		address = strings.TrimSpace(stringFromMap(compact, "server"))
+	}
+	port := intFromAnyValue(compact["port"])
+	if address == "" || port <= 0 || port > 65535 {
+		return errors.New("xhttp download settings require an address and port")
+	}
+
+	xhttp := map[string]any{}
+	if existing, ok := compact["xhttpSettings"].(map[string]any); ok {
+		for key, value := range existing {
+			xhttp[key] = value
+		}
+	}
+	for _, key := range []string{"path", "host"} {
+		if value := strings.TrimSpace(stringFromMap(compact, key)); value != "" {
+			xhttp[key] = value
+		}
+	}
+
+	normalized := map[string]any{
+		"address":       address,
+		"port":          port,
+		"network":       "xhttp",
+		"xhttpSettings": xhttp,
+	}
+	security := strings.ToLower(strings.TrimSpace(stringFromMap(compact, "security")))
+	serverName := strings.TrimSpace(stringFromMap(compact, "servername"))
+	if serverName == "" {
+		serverName = strings.TrimSpace(stringFromMap(compact, "serverName"))
+	}
+	tls, _ := compact["tlsSettings"].(map[string]any)
+	if security == "" && (serverName != "" || tls != nil || port == 443) {
+		security = "tls"
+	}
+	if security != "" && security != "none" {
+		normalized["security"] = security
+	}
+	if security == "tls" {
+		sanitizedTLS := make(map[string]any, len(tls)+1)
+		for key, value := range tls {
+			sanitizedTLS[key] = value
+		}
+		delete(sanitizedTLS, "allowInsecure")
+		delete(sanitizedTLS, "allow_insecure")
+		if serverName != "" {
+			sanitizedTLS["serverName"] = serverName
+		}
+		if legacyInsecure {
+			sanitizedTLS[xrayLegacyInsecureMarker] = true
+		}
+		normalized["tlsSettings"] = sanitizedTLS
+	}
+	if security == "reality" {
+		if reality, ok := compact["realitySettings"].(map[string]any); ok && len(reality) > 0 {
+			normalized["realitySettings"] = reality
+		}
+	}
+	extra["downloadSettings"] = normalized
+	return nil
 }
 
 func tlsSettings(q url.Values) map[string]any {
@@ -761,14 +1029,21 @@ func tlsSettings(q url.Values) map[string]any {
 	if alpn := firstQuery(q, "alpn"); alpn != "" {
 		out["alpn"] = splitCSV(alpn)
 	}
-	if allow := firstQuery(q, "allowInsecure", "allow_insecure"); allow != "" {
-		out["allowInsecure"] = boolString(allow)
+	if pins := splitCSV(firstQuery(q, "pinnedPeerCertSha256", "pinned_peer_cert_sha256")); len(pins) > 0 {
+		out["pinnedPeerCertSha256"] = strings.Join(pins, ",")
+	}
+	if names := splitCSV(firstQuery(q, "verifyPeerCertByName", "verifyPeerCertInNames", "verify_peer_cert_by_name", "verify_peer_cert_in_names")); len(names) > 0 {
+		out["verifyPeerCertByName"] = strings.Join(names, ",")
+	}
+	if boolString(firstQuery(q, "allowInsecure", "allow_insecure")) {
+		out[xrayLegacyInsecureMarker] = true
 	}
 	return out
 }
 
 func realitySettings(q url.Values) map[string]any {
 	out := tlsSettings(q)
+	delete(out, xrayLegacyInsecureMarker)
 	if publicKey := firstQuery(q, "pbk", "publicKey"); publicKey != "" {
 		out["publicKey"] = publicKey
 	}
@@ -802,6 +1077,10 @@ func parseShadowsocksShare(raw string) (method, password, host string, port int,
 	port = portFromURL(u)
 	userInfo := u.User.String()
 	if decoded, ok := decodeShareBase64(userInfo); ok && strings.Contains(decoded, ":") {
+		userInfo = decoded
+	} else if password, hasPassword := u.User.Password(); hasPassword {
+		userInfo = u.User.Username() + ":" + password
+	} else if decoded, decodeErr := url.PathUnescape(userInfo); decodeErr == nil {
 		userInfo = decoded
 	}
 	parts := strings.SplitN(userInfo, ":", 2)

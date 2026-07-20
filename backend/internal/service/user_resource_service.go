@@ -61,11 +61,17 @@ type UserResourceService struct {
 	userGroupRateRepo    UserGroupRateRepository
 	proxyProber          ProxyExitInfoProber
 	proxyLatencyCache    ProxyLatencyCache
+	proxyProbeResolver   ProxyProbeURLResolver
 	oauthSessionMu       sync.Mutex
 	oauthSessions        map[string]userResourceOAuthSession
 	proxySourceSchedMu   sync.Mutex
 	proxySourceCancel    context.CancelFunc
 	proxySourceDone      chan struct{}
+	proxyQualityMu       sync.Mutex
+	proxyQualityCancel   context.CancelFunc
+	proxyQualityJobs     chan userProxyQualityJob
+	proxyQualityDone     chan struct{}
+	proxyQualityRunner   userProxyQualityRunner
 }
 
 type userResourceDBTX interface {
@@ -90,6 +96,7 @@ func NewUserResourceService(
 		subscriptionService:  subscriptionService,
 		billingCacheService:  billingCacheService,
 		authCacheInvalidator: authCacheInvalidator,
+		proxyProbeResolver:   DefaultProxyProbeRuntimeResolver(),
 	}
 }
 
@@ -141,6 +148,13 @@ func (s *UserResourceService) SetProxyObservabilityServices(
 	}
 	s.proxyProber = proxyProber
 	s.proxyLatencyCache = proxyLatencyCache
+}
+
+func (s *UserResourceService) SetProxyProbeResolver(resolver ProxyProbeURLResolver) {
+	if s == nil {
+		return
+	}
+	s.proxyProbeResolver = resolver
 }
 
 type UserResourceOAuthAuthURLInput struct {
@@ -522,6 +536,7 @@ type UserResourceListOptions struct {
 	Timezone  string
 	SortBy    string
 	SortOrder string
+	OwnedOnly bool
 }
 
 type UserResourcePage struct {
@@ -681,6 +696,7 @@ var accountWritableColumns = map[string]columnSpec{
 
 var proxyWritableColumns = map[string]columnSpec{
 	"name":             {Kind: colString, Create: true, Update: true},
+	"is_public":        {Kind: colBool, Create: true, Update: true},
 	"kind":             {Kind: colString, Create: true, Update: true},
 	"protocol":         {Kind: colString, Create: true, Update: true},
 	"host":             {Kind: colString, Create: true, Update: true},
@@ -1367,6 +1383,10 @@ func (s *UserResourceService) UpdateAccount(ctx context.Context, ownerID, accoun
 	if err := s.normalizeAndValidateAccountPayload(ctx, ownerID, existing, payload); err != nil {
 		return nil, err
 	}
+	if incoming, ok := payload["credentials"].(map[string]any); ok {
+		existingCredentials, _ := existing["credentials"].(map[string]any)
+		payload["credentials"] = MergePreservingSensitiveCreds(existingCredentials, incoming)
+	}
 	groupIDsRaw, hasGroupIDs := payload["group_ids"]
 	delete(payload, "group_ids")
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -1549,9 +1569,11 @@ func (s *UserResourceService) ImportAccounts(ctx context.Context, ownerID int64,
 		return nil, infraerrors.BadRequest("USER_RESOURCE_BATCH_TOO_LARGE", "imports cannot exceed 1000 items per resource type")
 	}
 	proxyIDMap := map[int64]int64{}
+	createdProxyIDs := make([]int64, 0, len(proxyPayloads))
 	for i, proxyPayload := range proxyPayloads {
 		oldID := urToInt64(proxyPayload["id"])
 		clean := sanitizeImportPayload(proxyPayload)
+		clean["is_public"] = toBool(proxyPayload["is_public"])
 		created, err := s.CreateProxy(ctx, ownerID, clean)
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("proxy %d: %v", i+1, err))
@@ -1561,7 +1583,9 @@ func (s *UserResourceService) ImportAccounts(ctx context.Context, ownerID int64,
 		if oldID > 0 {
 			proxyIDMap[oldID] = urToInt64(created["id"])
 		}
+		createdProxyIDs = append(createdProxyIDs, urToInt64(created["id"]))
 	}
+	s.enqueueImportedProxyQualityChecks(ownerID, createdProxyIDs)
 
 	if len(accounts) == 0 {
 		return result, nil
@@ -1770,7 +1794,11 @@ func (s *UserResourceService) ListProxies(ctx context.Context, ownerID int64, op
 	}
 	page, pageSize := normalizeResourcePage(opts.Page, opts.PageSize)
 	args := []any{ownerID}
-	where := []string{"p.deleted_at IS NULL", "(p.owner_user_id = $1 OR (p.owner_user_id IS NULL AND p.is_public = true))"}
+	scope := "(p.owner_user_id = $1 OR p.is_public = true)"
+	if opts.OwnedOnly {
+		scope = "p.owner_user_id = $1"
+	}
+	where := []string{"p.deleted_at IS NULL", scope}
 	if opts.Protocol != "" {
 		where = append(where, "p.protocol = "+nextArg(&args, opts.Protocol))
 	}
@@ -1781,7 +1809,7 @@ func (s *UserResourceService) ListProxies(ctx context.Context, ownerID int64, op
 		where = append(where, "p.kind = "+nextArg(&args, opts.Type))
 	}
 	if opts.Search != "" {
-		where = append(where, "(p.name ILIKE "+nextArg(&args, "%"+opts.Search+"%")+" OR p.host ILIKE "+nextArg(&args, "%"+opts.Search+"%")+")")
+		where = append(where, "(p.name ILIKE "+nextArg(&args, "%"+opts.Search+"%")+" OR (p.owner_user_id = $1 AND p.host ILIKE "+nextArg(&args, "%"+opts.Search+"%")+"))")
 	}
 	whereSQL := strings.Join(where, " AND ")
 	var total int64
@@ -1832,7 +1860,7 @@ SELECT
 FROM proxies p
 WHERE p.id = $1
   AND p.deleted_at IS NULL
-  AND (p.owner_user_id = $2 OR (p.owner_user_id IS NULL AND p.is_public = true))
+  AND (p.owner_user_id = $2 OR p.is_public = true)
 LIMIT 1`, proxyID, ownerID)
 	if err != nil {
 		return nil, err
@@ -1864,12 +1892,12 @@ func (s *UserResourceService) createProxy(ctx context.Context, ownerID int64, pa
 	}
 	defaultPayload(payload, map[string]any{
 		"kind":             "standard",
+		"is_public":        false,
 		"status":           StatusActive,
 		"fallback_mode":    FallbackModeNone,
 		"expiry_warn_days": 7,
 		"extra":            map[string]any{},
 	})
-	payload["is_public"] = false
 	if err := s.normalizeAndValidateProxyPayload(ctx, ownerID, 0, nil, payload); err != nil {
 		return nil, err
 	}
@@ -1899,12 +1927,14 @@ func (s *UserResourceService) updateProxy(ctx context.Context, ownerID, proxyID 
 	if !preserveSourceMetadata {
 		stripProxySourceMetadata(payload)
 	}
-	delete(payload, "is_public")
 	if err := s.normalizeAndValidateProxyPayload(ctx, ownerID, proxyID, existing, payload); err != nil {
 		return nil, err
 	}
 	if err := DefaultXrayRuntimeManager().Stop(proxyID); err != nil {
 		return nil, fmt.Errorf("stop previous xray runtime: %w", err)
+	}
+	if err := DefaultSingBoxRuntimeManager().Stop(proxyID); err != nil {
+		return nil, fmt.Errorf("stop previous sing-box runtime: %w", err)
 	}
 	if err := s.updateOwned(ctx, "proxies", ownerID, proxyID, proxyWritableColumns, payload); err != nil {
 		return nil, err
@@ -1925,6 +1955,9 @@ func (s *UserResourceService) DeleteProxy(ctx context.Context, ownerID, proxyID 
 	}
 	if err := DefaultXrayRuntimeManager().Stop(proxyID); err != nil {
 		return fmt.Errorf("stop xray runtime before delete: %w", err)
+	}
+	if err := DefaultSingBoxRuntimeManager().Stop(proxyID); err != nil {
+		return fmt.Errorf("stop sing-box runtime before delete: %w", err)
 	}
 	res, err := s.db.ExecContext(ctx, "UPDATE proxies SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL", proxyID, ownerID)
 	if err != nil {
@@ -2007,7 +2040,21 @@ func (s *UserResourceService) TestProxy(ctx context.Context, ownerID, proxyID in
 	if err != nil {
 		return nil, err
 	}
-	proxyURL := proxyFromResourceMap(proxyItem).URL()
+	hideDetails := urToInt64(proxyItem["owner_user_id"]) != ownerID
+	proxyURL, cleanup, resolveErr := resolveProxyProbeURL(ctx, s.proxyProbeResolver, proxyFromResourceMap(proxyItem))
+	if resolveErr != nil {
+		message := logredact.RedactText(resolveErr.Error())
+		s.saveProxyObservation(ctx, proxyID, &ProxyLatencyInfo{
+			Success:   false,
+			Message:   message,
+			UpdatedAt: time.Now(),
+		})
+		if hideDetails {
+			message = "public proxy test failed"
+		}
+		return map[string]any{"success": false, "message": message}, nil
+	}
+	defer cleanup()
 	if s.proxyProber != nil {
 		exitInfo, latency, probeErr := s.proxyProber.ProbeProxy(ctx, proxyURL)
 		if probeErr != nil {
@@ -2017,6 +2064,9 @@ func (s *UserResourceService) TestProxy(ctx context.Context, ownerID, proxyID in
 				Message:   message,
 				UpdatedAt: time.Now(),
 			})
+			if hideDetails {
+				message = "public proxy test failed"
+			}
 			return map[string]any{"success": false, "message": message}, nil
 		}
 		latencyValue := latency
@@ -2037,7 +2087,9 @@ func (s *UserResourceService) TestProxy(ctx context.Context, ownerID, proxyID in
 			info.CountryCode = exitInfo.CountryCode
 			info.Region = exitInfo.Region
 			info.City = exitInfo.City
-			result["ip_address"] = exitInfo.IP
+			if !hideDetails {
+				result["ip_address"] = exitInfo.IP
+			}
 			result["country"] = exitInfo.Country
 			result["country_code"] = exitInfo.CountryCode
 			result["region"] = exitInfo.Region
@@ -2068,7 +2120,7 @@ func (s *UserResourceService) TestProxy(ctx context.Context, ownerID, proxyID in
 	return map[string]any{"success": true, "message": "proxy endpoint reachable", "latency_ms": latency}, nil
 }
 
-func (s *UserResourceService) ImportProxyNodes(ctx context.Context, ownerID int64, namePrefix, raw string) (*ProxyImportResult, error) {
+func (s *UserResourceService) ImportProxyNodes(ctx context.Context, ownerID int64, namePrefix, raw string, isPublic bool) (*ProxyImportResult, error) {
 	if err := s.ensureDB(); err != nil {
 		return nil, err
 	}
@@ -2090,14 +2142,15 @@ func (s *UserResourceService) ImportProxyNodes(ctx context.Context, ownerID int6
 			name = fmt.Sprintf("node-%d", i+1)
 		}
 		payload := map[string]any{
-			"name":     name,
-			"kind":     node.Kind,
-			"protocol": node.Protocol,
-			"host":     node.Host,
-			"port":     node.Port,
-			"username": node.Username,
-			"password": node.Password,
-			"extra":    map[string]any{"raw": node.Raw, "network": node.Network},
+			"name":      name,
+			"is_public": isPublic,
+			"kind":      node.Kind,
+			"protocol":  node.Protocol,
+			"host":      node.Host,
+			"port":      node.Port,
+			"username":  node.Username,
+			"password":  node.Password,
+			"extra":     map[string]any{"raw": node.Raw, "network": node.Network},
 		}
 		created, err := s.CreateProxy(ctx, ownerID, payload)
 		if err != nil {
@@ -2106,6 +2159,7 @@ func (s *UserResourceService) ImportProxyNodes(ctx context.Context, ownerID int6
 		}
 		result.Created = append(result.Created, created)
 	}
+	s.enqueueImportedProxyQualityChecks(ownerID, proxyIDsFromResourceItems(result.Created))
 	return result, nil
 }
 
@@ -2145,7 +2199,6 @@ func (s *UserResourceService) QualityCheckProxy(ctx context.Context, ownerID, pr
 	if err != nil {
 		return nil, err
 	}
-	proxyURL := proxyFromResourceMap(proxyItem).URL()
 	result := &ProxyQualityCheckResult{
 		ProxyID:   proxyID,
 		Score:     100,
@@ -2153,10 +2206,32 @@ func (s *UserResourceService) QualityCheckProxy(ctx context.Context, ownerID, pr
 		CheckedAt: time.Now().Unix(),
 		Items:     make([]ProxyQualityCheckItem, 0, len(proxyQualityTargets)+1),
 	}
+	if urToInt64(proxyItem["owner_user_id"]) != ownerID {
+		defer func() {
+			result.ExitIP = ""
+			for index := range result.Items {
+				if result.Items[index].Target == "base_connectivity" {
+					result.Items[index].Message = ""
+				}
+			}
+		}()
+	}
 	var exitInfo *ProxyExitInfo
 	defer func() {
 		s.saveUserProxyQualitySnapshot(ctx, proxyID, result, exitInfo)
 	}()
+	proxyURL, cleanup, resolveErr := resolveProxyProbeURL(ctx, s.proxyProbeResolver, proxyFromResourceMap(proxyItem))
+	if resolveErr != nil {
+		result.Items = append(result.Items, ProxyQualityCheckItem{
+			Target:  "base_connectivity",
+			Status:  "fail",
+			Message: logredact.RedactText(resolveErr.Error()),
+		})
+		result.FailedCount++
+		finalizeProxyQualityResult(result)
+		return result, nil
+	}
+	defer cleanup()
 
 	var base ProxyQualityCheckItem
 	if s.proxyProber != nil {
@@ -2288,7 +2363,7 @@ func (s *UserResourceService) ListProxySources(ctx context.Context, ownerID int6
 	limitArg := nextArg(&args, pageSize)
 	offsetArg := nextArg(&args, (page-1)*pageSize)
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, owner_user_id, name, subscription_url, refresh_interval_minutes,
+SELECT id, owner_user_id, name, subscription_url, is_public, refresh_interval_minutes,
        last_synced_at, last_sync_status, last_sync_error, last_imported_count,
        created_at, updated_at
 FROM proxy_sources
@@ -2327,11 +2402,19 @@ func (s *UserResourceService) CreateProxySource(ctx context.Context, ownerID int
 	if interval < 5 || interval > 7*24*60 {
 		return nil, infraerrors.BadRequest("PROXY_SOURCE_INTERVAL_INVALID", "refresh_interval_minutes must be between 5 and 10080")
 	}
+	isPublic := false
+	if rawVisibility, exists := payload["is_public"]; exists {
+		var err error
+		isPublic, err = strictBoolValue(rawVisibility)
+		if err != nil {
+			return nil, invalidUserResourceField("is_public", err.Error())
+		}
+	}
 	var id int64
 	err := s.db.QueryRowContext(ctx, `
-INSERT INTO proxy_sources (owner_user_id, name, subscription_url, refresh_interval_minutes, created_at, updated_at)
-VALUES ($1, $2, $3, $4, NOW(), NOW())
-RETURNING id`, ownerID, name, subscriptionURL, interval).Scan(&id)
+INSERT INTO proxy_sources (owner_user_id, name, subscription_url, is_public, refresh_interval_minutes, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+RETURNING id`, ownerID, name, subscriptionURL, isPublic, interval).Scan(&id)
 	if err != nil {
 		return nil, err
 	}
@@ -2343,7 +2426,7 @@ func (s *UserResourceService) GetProxySource(ctx context.Context, ownerID, sourc
 		return nil, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, owner_user_id, name, subscription_url, refresh_interval_minutes,
+SELECT id, owner_user_id, name, subscription_url, is_public, refresh_interval_minutes,
        last_synced_at, last_sync_status, last_sync_error, last_imported_count,
        created_at, updated_at
 FROM proxy_sources
@@ -2395,12 +2478,27 @@ func (s *UserResourceService) UpdateProxySource(ctx context.Context, ownerID, so
 		args = append(args, interval)
 		assignments = append(assignments, fmt.Sprintf("refresh_interval_minutes = $%d", len(args)))
 	}
+	visibilityChanged := false
+	if _, ok := payload["is_public"]; ok {
+		isPublic, err := strictBoolValue(payload["is_public"])
+		if err != nil {
+			return nil, invalidUserResourceField("is_public", err.Error())
+		}
+		args = append(args, isPublic)
+		assignments = append(assignments, fmt.Sprintf("is_public = $%d", len(args)))
+		visibilityChanged = true
+	}
 	if len(assignments) == 0 {
 		return s.GetProxySource(ctx, ownerID, sourceID)
 	}
 	assignments = append(assignments, "updated_at = NOW()")
 	args = append(args, sourceID, ownerID)
-	res, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, fmt.Sprintf(`
 UPDATE proxy_sources SET %s
 WHERE id = $%d AND owner_user_id = $%d AND deleted_at IS NULL`, strings.Join(assignments, ", "), len(args)-1, len(args)), args...)
 	if err != nil {
@@ -2408,6 +2506,19 @@ WHERE id = $%d AND owner_user_id = $%d AND deleted_at IS NULL`, strings.Join(ass
 	}
 	if affected(res) == 0 {
 		return nil, ErrUserResourceNotFound
+	}
+	if visibilityChanged {
+		isPublic := toBool(payload["is_public"])
+		if _, err := tx.ExecContext(ctx, `
+UPDATE proxies
+SET is_public = $1, updated_at = NOW()
+WHERE owner_user_id = $2 AND deleted_at IS NULL AND extra->>'source_id' = $3`,
+			isPublic, ownerID, strconv.FormatInt(sourceID, 10)); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
 	}
 	return s.GetProxySource(ctx, ownerID, sourceID)
 }
@@ -2442,7 +2553,7 @@ SET last_synced_at = NOW(), last_sync_status = 'error', last_sync_error = $1, up
 WHERE id = $2 AND owner_user_id = $3`, safeSyncError(err), sourceID, ownerID)
 		return nil, err
 	}
-	imported, err := s.syncProxySourceNodes(ctx, ownerID, sourceID, urAsString(source["name"]), content)
+	imported, err := s.syncProxySourceNodes(ctx, ownerID, sourceID, urAsString(source["name"]), content, toBool(source["is_public"]))
 	if err != nil {
 		_, _ = s.db.ExecContext(ctx, `
 UPDATE proxy_sources
@@ -2467,6 +2578,7 @@ UPDATE proxy_sources
 SET last_synced_at = NOW(), last_sync_status = $1, last_sync_error = $2,
     last_imported_count = $3, updated_at = NOW()
 WHERE id = $4 AND owner_user_id = $5`, status, errorText, importedCount, sourceID, ownerID)
+	s.enqueueImportedProxyQualityChecks(ownerID, proxyIDsFromResourceItems(imported.Created))
 	return &ProxySourceSyncResult{
 		SourceID:      sourceID,
 		Status:        status,
@@ -2479,7 +2591,7 @@ WHERE id = $4 AND owner_user_id = $5`, status, errorText, importedCount, sourceI
 	}, nil
 }
 
-func (s *UserResourceService) syncProxySourceNodes(ctx context.Context, ownerID, sourceID int64, sourceName, raw string) (*ProxyImportResult, error) {
+func (s *UserResourceService) syncProxySourceNodes(ctx context.Context, ownerID, sourceID int64, sourceName, raw string, isPublic bool) (*ProxyImportResult, error) {
 	nodes := parseProxyNodeLines(raw)
 	if len(nodes) > userResourceBatchMaxItems {
 		return nil, infraerrors.BadRequest("USER_RESOURCE_BATCH_TOO_LARGE", "proxy imports cannot exceed 1000 nodes")
@@ -2498,14 +2610,15 @@ func (s *UserResourceService) syncProxySourceNodes(ctx context.Context, ownerID,
 		seenKeys = append(seenKeys, nodeKey)
 		name := proxySourceNodeName(sourceID, sourceName, node.Name, index+1)
 		payload := map[string]any{
-			"name":     name,
-			"kind":     node.Kind,
-			"protocol": node.Protocol,
-			"host":     node.Host,
-			"port":     node.Port,
-			"username": node.Username,
-			"password": node.Password,
-			"status":   StatusActive,
+			"name":      name,
+			"is_public": isPublic,
+			"kind":      node.Kind,
+			"protocol":  node.Protocol,
+			"host":      node.Host,
+			"port":      node.Port,
+			"username":  node.Username,
+			"password":  node.Password,
+			"status":    StatusActive,
 			"extra": map[string]any{
 				"raw": node.Raw, "network": node.Network,
 				"source_id": sourceID, "source_node_key": nodeKey,
@@ -2544,6 +2657,7 @@ LIMIT 1`, ownerID, strconv.FormatInt(sourceID, 10), nodeKey).Scan(&proxyID)
 		}
 		for _, proxyID := range staleIDs {
 			_ = DefaultXrayRuntimeManager().Stop(proxyID)
+			_ = DefaultSingBoxRuntimeManager().Stop(proxyID)
 		}
 	}
 	return result, nil
@@ -3416,7 +3530,7 @@ SELECT EXISTS (
   SELECT 1 FROM proxies
   WHERE id = $1 AND deleted_at IS NULL
     AND status = 'active' AND (expires_at IS NULL OR expires_at > NOW())
-    AND (owner_user_id = $2 OR (owner_user_id IS NULL AND is_public = true))
+    AND (owner_user_id = $2 OR is_public = true)
 )`, proxyID, ownerID).Scan(&ok)
 	if err != nil {
 		return err
@@ -4449,12 +4563,22 @@ func redactPublicProxy(item map[string]any, ownerID int64) {
 	if item == nil {
 		return
 	}
-	if urToInt64(item["owner_user_id"]) == ownerID {
+	owned := urToInt64(item["owner_user_id"]) == ownerID
+	item["is_owned"] = owned
+	if owned {
 		return
 	}
 	if toBool(item["is_public"]) {
+		item["owner_user_id"] = nil
+		item["host"] = ""
+		item["port"] = nil
 		item["username"] = ""
 		item["password"] = ""
+		item["has_auth"] = nil
+		item["backup_proxy_id"] = nil
+		item["ip_address"] = ""
+		item["latency_message"] = ""
+		item["details_hidden"] = true
 		item["extra"] = redactProxyExtra(item["extra"])
 	}
 }
@@ -4464,6 +4588,30 @@ func RedactProxyPageForUserResponse(page *UserResourcePage) {
 		return
 	}
 	for _, item := range page.Items {
+		RedactProxyForUserResponse(item)
+	}
+}
+
+func RedactProxyImportResultForUserResponse(result *ProxyImportResult) {
+	if result == nil {
+		return
+	}
+	for _, item := range result.Created {
+		RedactProxyForUserResponse(item)
+	}
+	for _, item := range result.Updated {
+		RedactProxyForUserResponse(item)
+	}
+}
+
+func RedactProxySourceSyncResultForUserResponse(result *ProxySourceSyncResult) {
+	if result == nil {
+		return
+	}
+	for _, item := range result.Created {
+		RedactProxyForUserResponse(item)
+	}
+	for _, item := range result.Updated {
 		RedactProxyForUserResponse(item)
 	}
 }
@@ -4499,8 +4647,21 @@ func RedactAccountForUserResponse(item map[string]any) {
 	if item == nil {
 		return
 	}
-	item["has_credentials"] = hasNonEmptyCredentialValue(item["credentials"])
-	item["credentials"] = map[string]any{}
+	credentials, _ := item["credentials"].(map[string]any)
+	item["has_credentials"] = hasNonEmptyCredentialValue(credentials)
+	status := make(map[string]bool)
+	redacted := make(map[string]any, len(credentials))
+	for key, value := range credentials {
+		if IsSensitiveCredentialKey(key) && hasNonEmptyCredentialValue(value) {
+			status["has_"+key] = true
+			continue
+		}
+		redacted[key] = value
+	}
+	if len(status) > 0 {
+		item["credentials_status"] = status
+	}
+	item["credentials"] = redacted
 	item["credentials_redacted"] = true
 }
 
@@ -4636,7 +4797,7 @@ SELECT
 FROM proxies p
 WHERE p.id = $1
   AND p.deleted_at IS NULL
-  AND (p.owner_user_id = $2 OR (p.owner_user_id IS NULL AND p.is_public = true))
+  AND (p.owner_user_id = $2 OR p.is_public = true)
 LIMIT 1`, proxyID, ownerID)
 	if err != nil {
 		return nil, err
@@ -4959,10 +5120,14 @@ func singBoxOutboundItems(document any) []map[string]any {
 	case []any:
 		return toMaps(value)
 	case map[string]any:
+		combined := make([]map[string]any, 0)
 		for _, key := range []string{"outbounds", "endpoints"} {
 			if items, ok := value[key].([]any); ok && len(items) > 0 {
-				return toMaps(items)
+				combined = append(combined, toMaps(items)...)
 			}
+		}
+		if len(combined) > 0 {
+			return combined
 		}
 		if strings.TrimSpace(urAsString(value["type"])) != "" {
 			return []map[string]any{value}
@@ -4972,6 +5137,9 @@ func singBoxOutboundItems(document any) []map[string]any {
 }
 
 func parseSingBoxProxyNode(outbound map[string]any) parsedProxyNode {
+	if node := parseSingBoxExtendedProxyNode(outbound); node.Kind != "" || node.Err != "" {
+		return node
+	}
 	clash := map[string]any{
 		"name":     urAsString(outbound["tag"]),
 		"type":     urAsString(outbound["type"]),
@@ -5024,6 +5192,156 @@ func parseSingBoxProxyNode(outbound map[string]any) parsedProxyNode {
 	return parseClashProxyNode(clash)
 }
 
+// parseSingBoxExtendedProxyNode keeps the native sing-box fields for protocols
+// that do not have a lossless Clash representation. The resulting canonical URI
+// is stored in the proxy record and rebuilt by the controlled runtime later.
+func parseSingBoxExtendedProxyNode(outbound map[string]any) parsedProxyNode {
+	protocol := canonicalSingBoxProtocol(urAsString(outbound["type"]))
+	if protocol != "hysteria" && protocol != "hysteria2" && protocol != "tuic" && protocol != "anytls" && protocol != "naive" && protocol != "wireguard" {
+		return parsedProxyNode{}
+	}
+	name := urAsString(outbound["tag"])
+	server := urAsString(outbound["server"])
+	port := toInt(outbound["server_port"])
+	if port <= 0 && (protocol == "hysteria" || protocol == "hysteria2") {
+		port = firstPortFromAny(outbound["server_ports"])
+	}
+	if protocol == "wireguard" {
+		peers, _ := outbound["peers"].([]any)
+		if len(peers) == 0 {
+			return parsedProxyNode{Name: name, Err: "wireguard node has no peer"}
+		}
+		peer, _ := peers[0].(map[string]any)
+		server = urAsString(peer["address"])
+		port = toInt(peer["port"])
+		if server == "" || port <= 0 {
+			return parsedProxyNode{Name: name, Err: "wireguard node missing peer endpoint"}
+		}
+	}
+	if server == "" || port <= 0 {
+		return parsedProxyNode{Name: name, Err: "sing-box node missing server or port"}
+	}
+
+	u := &url.URL{Scheme: protocol, Host: net.JoinHostPort(server, strconv.Itoa(port))}
+	q := url.Values{}
+	tls, _ := outbound["tls"].(map[string]any)
+	addCanonicalQuery(q, "sni", urAsString(tls["server_name"]))
+	if toBool(tls["insecure"]) {
+		q.Set("insecure", "1")
+	}
+	if alpn := stringSliceFromAny(tls["alpn"]); len(alpn) > 0 {
+		q.Set("alpn", strings.Join(alpn, ","))
+	}
+	if utls, ok := tls["utls"].(map[string]any); ok && toBool(utls["enabled"]) {
+		addCanonicalQuery(q, "fp", urAsString(utls["fingerprint"]))
+	}
+	switch protocol {
+	case "hysteria":
+		u.User = url.User(urAsString(outbound["auth_str"]))
+		addCanonicalQuery(q, "upmbps", urAsString(outbound["up_mbps"]))
+		addCanonicalQuery(q, "downmbps", urAsString(outbound["down_mbps"]))
+		addCanonicalQuery(q, "obfs", urAsString(outbound["obfs"]))
+		addCanonicalQuery(q, "recv_window_conn", urAsString(outbound["recv_window_conn"]))
+		addCanonicalQuery(q, "recv_window", urAsString(outbound["recv_window"]))
+		addSingBoxPortHoppingQuery(q, outbound)
+	case "hysteria2":
+		u.User = url.User(urAsString(outbound["password"]))
+		if obfs, ok := outbound["obfs"].(map[string]any); ok {
+			addCanonicalQuery(q, "obfs", urAsString(obfs["type"]))
+			addCanonicalQuery(q, "obfs-password", urAsString(obfs["password"]))
+		}
+		addCanonicalQuery(q, "upmbps", urAsString(outbound["up_mbps"]))
+		addCanonicalQuery(q, "downmbps", urAsString(outbound["down_mbps"]))
+		addSingBoxPortHoppingQuery(q, outbound)
+	case "tuic":
+		u.User = url.UserPassword(urAsString(outbound["uuid"]), urAsString(outbound["password"]))
+		addCanonicalQuery(q, "congestion_control", urAsString(outbound["congestion_control"]))
+		addCanonicalQuery(q, "udp_relay_mode", urAsString(outbound["udp_relay_mode"]))
+	case "anytls":
+		u.User = url.User(urAsString(outbound["password"]))
+	case "naive":
+		username := urAsString(outbound["username"])
+		password := urAsString(outbound["password"])
+		if username != "" {
+			u.User = url.UserPassword(username, password)
+		} else {
+			u.User = url.User(password)
+		}
+		if toBool(outbound["quic"]) {
+			u.Scheme = "naive+quic"
+		} else {
+			u.Scheme = "naive+https"
+		}
+	case "wireguard":
+		u.User = url.User(urAsString(outbound["private_key"]))
+		addCanonicalQuery(q, "publickey", urAsString(firstMapFromAny(outbound["peers"], "public_key")))
+		addCanonicalQuery(q, "presharedkey", urAsString(firstMapFromAny(outbound["peers"], "pre_shared_key")))
+		addCanonicalQuery(q, "address", strings.Join(stringSliceFromAny(outbound["address"]), ","))
+		addCanonicalQuery(q, "allowedips", strings.Join(stringSliceFromAny(firstMapFromAny(outbound["peers"], "allowed_ips")), ","))
+		addCanonicalQuery(q, "mtu", urAsString(outbound["mtu"]))
+	}
+	u.RawQuery = q.Encode()
+	if name != "" {
+		u.Fragment = name
+	}
+	return parsedProxyNode{Name: name, Kind: "xray", Protocol: protocol, Host: server, Port: port, Network: "", Raw: u.String()}
+}
+
+func addSingBoxPortHoppingQuery(q url.Values, outbound map[string]any) {
+	addCanonicalQuery(q, "mport", strings.Join(stringSliceFromAny(outbound["server_ports"]), ","))
+	addCanonicalQuery(q, "hop_interval", urAsString(outbound["hop_interval"]))
+}
+
+func addCanonicalQuery(q url.Values, key, value string) {
+	if strings.TrimSpace(value) != "" {
+		q.Set(key, value)
+	}
+}
+
+func firstMapFromAny(value any, key string) any {
+	if values, ok := value.([]any); ok && len(values) > 0 {
+		if item, ok := values[0].(map[string]any); ok {
+			return item[key]
+		}
+	}
+	if values, ok := value.([]map[string]any); ok && len(values) > 0 {
+		return values[0][key]
+	}
+	return nil
+}
+
+func stringSliceFromAny(value any) []string {
+	switch values := value.(type) {
+	case []string:
+		return values
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, item := range values {
+			if value := strings.TrimSpace(urAsString(item)); value != "" {
+				out = append(out, value)
+			}
+		}
+		return out
+	case string:
+		return splitCSV(values)
+	default:
+		return nil
+	}
+}
+
+func firstPortFromAny(value any) int {
+	values := stringSliceFromAny(value)
+	if len(values) == 0 {
+		return 0
+	}
+	first := strings.TrimSpace(values[0])
+	if index := strings.IndexAny(first, ":-"); index >= 0 {
+		first = first[:index]
+	}
+	port, _ := strconv.Atoi(first)
+	return port
+}
+
 func decodeProxySubscriptionPayload(raw string) (string, bool) {
 	decoded, ok := decodeShareBase64(raw)
 	if !ok {
@@ -5068,6 +5386,9 @@ func parseClashProxyNode(proxy map[string]any) parsedProxyNode {
 	case "shadowsocks":
 		protocol = "ss"
 	}
+	if port <= 0 && (protocol == "hysteria" || protocol == "hysteria2" || protocol == "hy2") {
+		port = firstPortFromAny(proxy["ports"])
+	}
 	if host == "" || port <= 0 {
 		return parsedProxyNode{Name: name, Err: "missing host or port"}
 	}
@@ -5107,9 +5428,136 @@ func parseClashProxyNode(proxy map[string]any) parsedProxyNode {
 		}
 		raw := buildClashTrojanURI(proxy, host, port, password, name)
 		return parsedProxyNode{Name: name, Kind: "xray", Protocol: "trojan", Host: host, Port: port, Password: password, Network: clashString(proxy, "network"), Raw: raw}
+	case "hysteria":
+		auth := clashString(proxy, "auth-str", "auth_str", "auth", "password")
+		upMbps := clashString(proxy, "up", "up-mbps", "up_mbps")
+		downMbps := clashString(proxy, "down", "down-mbps", "down_mbps")
+		if auth == "" || upMbps == "" || downMbps == "" {
+			return parsedProxyNode{Name: name, Err: "hysteria node missing authentication or bandwidth"}
+		}
+		raw := buildClashHysteriaURI(proxy, host, port, auth, name)
+		return parsedProxyNode{Name: name, Kind: "xray", Protocol: "hysteria", Host: host, Port: port, Password: auth, Raw: raw}
+	case "hysteria2", "hy2":
+		password := clashString(proxy, "password", "auth")
+		if password == "" {
+			return parsedProxyNode{Name: name, Err: "hysteria2 node missing password"}
+		}
+		raw := buildClashHysteria2URI(proxy, host, port, password, name)
+		return parsedProxyNode{Name: name, Kind: "xray", Protocol: "hysteria2", Host: host, Port: port, Password: password, Raw: raw}
+	case "tuic":
+		uuid := clashString(proxy, "uuid", "id")
+		password := clashString(proxy, "password")
+		if uuid == "" || password == "" {
+			return parsedProxyNode{Name: name, Err: "tuic node missing uuid or password"}
+		}
+		raw := buildClashTUICURI(proxy, host, port, uuid, password, name)
+		return parsedProxyNode{Name: name, Kind: "xray", Protocol: "tuic", Host: host, Port: port, Password: password, Raw: raw}
+	case "anytls":
+		password := clashString(proxy, "password")
+		if password == "" {
+			return parsedProxyNode{Name: name, Err: "anytls node missing password"}
+		}
+		raw := buildClashAnyTLSURI(proxy, host, port, password, name)
+		return parsedProxyNode{Name: name, Kind: "xray", Protocol: "anytls", Host: host, Port: port, Password: password, Raw: raw}
+	case "wireguard":
+		privateKey := clashString(proxy, "private-key", "private_key")
+		publicKey := clashString(proxy, "public-key", "public_key")
+		address := clashString(proxy, "ip", "address")
+		if privateKey == "" || publicKey == "" || address == "" {
+			return parsedProxyNode{Name: name, Err: "wireguard node missing keys or interface address"}
+		}
+		raw := buildClashWireGuardURI(proxy, host, port, privateKey, publicKey, address, name)
+		return parsedProxyNode{Name: name, Kind: "xray", Protocol: "wireguard", Host: host, Port: port, Password: privateKey, Raw: raw}
 	default:
 		return parsedProxyNode{Name: name, Err: "unsupported clash proxy type"}
 	}
+}
+
+func buildClashHysteriaURI(proxy map[string]any, host string, port int, auth, name string) string {
+	u := &url.URL{Scheme: "hysteria", Host: net.JoinHostPort(host, strconv.Itoa(port)), User: url.User(auth)}
+	q := url.Values{}
+	addClashQuery(q, "sni", clashString(proxy, "sni", "servername"))
+	addClashQuery(q, "upmbps", clashString(proxy, "up", "up-mbps", "up_mbps"))
+	addClashQuery(q, "downmbps", clashString(proxy, "down", "down-mbps", "down_mbps"))
+	addClashQuery(q, "obfs", clashString(proxy, "obfs"))
+	addClashQuery(q, "recv_window_conn", clashString(proxy, "recv-window-conn", "recv_window_conn"))
+	addClashQuery(q, "recv_window", clashString(proxy, "recv-window", "recv_window"))
+	addClashQuery(q, "alpn", strings.Join(stringSliceFromAny(proxy["alpn"]), ","))
+	addClashQuery(q, "mport", strings.Join(stringSliceFromAny(proxy["ports"]), ","))
+	addClashQuery(q, "hop_interval", clashString(proxy, "hop-interval", "hop_interval"))
+	if toBool(proxy["skip-cert-verify"]) || toBool(proxy["insecure"]) {
+		q.Set("insecure", "1")
+	}
+	u.RawQuery = q.Encode()
+	if name != "" {
+		u.Fragment = name
+	}
+	return u.String()
+}
+
+func buildClashHysteria2URI(proxy map[string]any, host string, port int, password, name string) string {
+	u := &url.URL{Scheme: "hy2", Host: net.JoinHostPort(host, strconv.Itoa(port)), User: url.User(password)}
+	q := url.Values{}
+	addClashQuery(q, "sni", clashString(proxy, "sni", "servername"))
+	if toBool(proxy["skip-cert-verify"]) || toBool(proxy["insecure"]) {
+		q.Set("insecure", "1")
+	}
+	addClashQuery(q, "obfs", clashString(proxy, "obfs"))
+	addClashQuery(q, "obfs-password", clashString(proxy, "obfs-password", "obfs_password"))
+	addClashQuery(q, "upmbps", clashString(proxy, "up", "up-mbps", "up_mbps"))
+	addClashQuery(q, "downmbps", clashString(proxy, "down", "down-mbps", "down_mbps"))
+	addClashQuery(q, "alpn", strings.Join(stringSliceFromAny(proxy["alpn"]), ","))
+	addClashQuery(q, "mport", strings.Join(stringSliceFromAny(proxy["ports"]), ","))
+	addClashQuery(q, "hop_interval", clashString(proxy, "hop-interval", "hop_interval"))
+	u.RawQuery = q.Encode()
+	if name != "" {
+		u.Fragment = name
+	}
+	return u.String()
+}
+
+func buildClashTUICURI(proxy map[string]any, host string, port int, uuid, password, name string) string {
+	u := &url.URL{Scheme: "tuic", Host: net.JoinHostPort(host, strconv.Itoa(port)), User: url.UserPassword(uuid, password)}
+	q := url.Values{}
+	addClashQuery(q, "sni", clashString(proxy, "sni", "servername"))
+	addClashQuery(q, "congestion_control", clashString(proxy, "congestion-controller", "congestion_control"))
+	addClashQuery(q, "udp_relay_mode", clashString(proxy, "udp-relay-mode", "udp_relay_mode"))
+	if toBool(proxy["skip-cert-verify"]) {
+		q.Set("insecure", "1")
+	}
+	u.RawQuery = q.Encode()
+	if name != "" {
+		u.Fragment = name
+	}
+	return u.String()
+}
+
+func buildClashAnyTLSURI(proxy map[string]any, host string, port int, password, name string) string {
+	u := &url.URL{Scheme: "anytls", Host: net.JoinHostPort(host, strconv.Itoa(port)), User: url.User(password)}
+	q := url.Values{}
+	addClashQuery(q, "sni", clashString(proxy, "sni", "servername"))
+	if toBool(proxy["skip-cert-verify"]) {
+		q.Set("insecure", "1")
+	}
+	u.RawQuery = q.Encode()
+	if name != "" {
+		u.Fragment = name
+	}
+	return u.String()
+}
+
+func buildClashWireGuardURI(proxy map[string]any, host string, port int, privateKey, publicKey, address, name string) string {
+	u := &url.URL{Scheme: "wireguard", Host: net.JoinHostPort(host, strconv.Itoa(port)), User: url.User(privateKey)}
+	q := url.Values{"publickey": []string{publicKey}, "address": []string{address}}
+	addClashQuery(q, "presharedkey", clashString(proxy, "pre-shared-key", "preshared-key", "presharedkey"))
+	addClashQuery(q, "reserved", strings.Join(stringSliceFromAny(proxy["reserved"]), ","))
+	addClashQuery(q, "mtu", clashString(proxy, "mtu"))
+	addClashQuery(q, "allowedips", strings.Join(stringSliceFromAny(proxy["allowed-ips"]), ","))
+	u.RawQuery = q.Encode()
+	if name != "" {
+		u.Fragment = name
+	}
+	return u.String()
 }
 
 func clashString(proxy map[string]any, keys ...string) string {
@@ -5240,6 +5688,13 @@ func addClashQuery(q url.Values, key, value string) {
 }
 
 func parseProxyNode(line string) parsedProxyNode {
+	lower := strings.ToLower(strings.TrimSpace(line))
+	if strings.HasPrefix(lower, "vmess://") {
+		return parseVMessShareNode(line)
+	}
+	if strings.HasPrefix(lower, "ss://") {
+		return parseShadowsocksNode(line)
+	}
 	u, err := url.Parse(line)
 	if err != nil || u.Scheme == "" {
 		return parsedProxyNode{Raw: line, Err: "unsupported node"}
@@ -5255,22 +5710,79 @@ func parseProxyNode(line string) parsedProxyNode {
 		node.Username = u.User.Username()
 		node.Password, _ = u.User.Password()
 	}
-	if node.Protocol == "http" || node.Protocol == "socks" || node.Protocol == "socks5" {
+	if node.Protocol == "http" || node.Protocol == "https" || node.Protocol == "socks" || node.Protocol == "socks5" || node.Protocol == "socks5h" {
 		node.Kind = "standard"
 	}
-	if node.Protocol == "ss" && node.Username == "" {
-		if decoded, err := base64.RawURLEncoding.DecodeString(u.User.String()); err == nil {
-			parts := strings.SplitN(string(decoded), ":", 2)
-			if len(parts) == 2 {
-				node.Username, node.Password = parts[0], parts[1]
-			}
-		}
+	if canonicalSingBoxProtocol(node.Protocol) != node.Protocol {
+		node.Protocol = canonicalSingBoxProtocol(node.Protocol)
 	}
 	if node.Host == "" || node.Port <= 0 {
 		return parsedProxyNode{Raw: line, Err: "missing host or port"}
 	}
-	if node.Protocol == "socks" {
+	if node.Protocol == "socks" || node.Protocol == "socks5h" {
 		node.Protocol = "socks5"
 	}
+	if node.Kind == "xray" {
+		switch node.Protocol {
+		case "vmess", "vless", "trojan", "ss", "hysteria", "hysteria2", "tuic", "anytls", "naive", "wireguard":
+		default:
+			return parsedProxyNode{Raw: line, Err: "unsupported node protocol"}
+		}
+	}
 	return node
+}
+
+func parseVMessShareNode(line string) parsedProxyNode {
+	payload := strings.TrimSpace(line)
+	payload = payload[len("vmess://"):]
+	if index := strings.IndexAny(payload, "?#"); index >= 0 {
+		payload = payload[:index]
+	}
+	decoded, ok := decodeShareBase64(payload)
+	if !ok {
+		return parsedProxyNode{Raw: line, Err: "invalid vmess payload"}
+	}
+	var data map[string]any
+	if err := json.Unmarshal([]byte(decoded), &data); err != nil {
+		return parsedProxyNode{Raw: line, Err: "invalid vmess payload"}
+	}
+	host := strings.TrimSpace(urAsString(data["add"]))
+	port := toInt(data["port"])
+	uuid := strings.TrimSpace(urAsString(data["id"]))
+	if host == "" || port <= 0 || port > 65535 || uuid == "" {
+		return parsedProxyNode{Raw: line, Err: "vmess node missing address, port or id"}
+	}
+	return parsedProxyNode{
+		Raw:      line,
+		Name:     strings.TrimSpace(urAsString(data["ps"])),
+		Kind:     "xray",
+		Protocol: "vmess",
+		Host:     host,
+		Port:     port,
+		Username: uuid,
+		Network:  strings.TrimSpace(urAsString(data["net"])),
+	}
+}
+
+func parseShadowsocksNode(line string) parsedProxyNode {
+	method, password, host, port, err := parseShadowsocksShare(line)
+	if err != nil {
+		return parsedProxyNode{Raw: line, Err: "invalid shadowsocks payload"}
+	}
+	name := ""
+	if parsed, parseErr := url.Parse(line); parseErr == nil {
+		if decoded, decodeErr := url.QueryUnescape(strings.TrimPrefix(parsed.Fragment, "#")); decodeErr == nil {
+			name = decoded
+		}
+	}
+	return parsedProxyNode{
+		Raw:      line,
+		Name:     name,
+		Kind:     "xray",
+		Protocol: "ss",
+		Host:     host,
+		Port:     port,
+		Username: method,
+		Password: password,
+	}
 }

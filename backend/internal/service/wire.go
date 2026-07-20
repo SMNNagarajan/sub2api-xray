@@ -87,6 +87,7 @@ func ProvideUserResourceService(
 	svc.SetOAuthServices(oauthService, openAIOAuthService, geminiOAuthService, antigravityOAuthService, grokOAuthService)
 	svc.SetGroupSupportServices(dashboardService, groupCapacityService, userGroupRateRepo)
 	svc.SetProxyObservabilityServices(proxyProber, proxyLatencyCache)
+	svc.StartProxyQualityWorkers()
 	svc.StartProxySourceScheduler(time.Minute)
 	return svc
 }

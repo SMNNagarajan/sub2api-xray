@@ -9,6 +9,11 @@ describe('admin proxy modern mode support', () => {
   it('supports standard and Xray proxy modes without dropping node metadata', () => {
     expect(source).toContain("kind: 'standard' as ProxyKind")
     expect(source).toContain("{ value: 'vless', label: 'VLESS' }")
+    expect(source).toContain("{ value: 'hysteria2', label: 'Hysteria2' }")
+    expect(source).toContain("{ value: 'tuic', label: 'TUIC' }")
+    expect(source).toContain("{ value: 'anytls', label: 'AnyTLS' }")
+    expect(source).toContain("{ value: 'naive', label: 'Naive' }")
+    expect(source).toContain("{ value: 'wireguard', label: 'WireGuard' }")
     expect(source).toContain("{ ...(editingProxy.value.extra || {}), raw: editForm.xray_raw.trim() }")
     expect(source).toContain("proxy.kind || 'standard'")
   })
