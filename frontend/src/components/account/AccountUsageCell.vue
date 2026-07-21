@@ -408,7 +408,7 @@
         <UsageProgressBar
           v-if="grokFreeTokenBar"
           label="24h"
-          :title="t('admin.accounts.usageWindow.grokFreeQuota24hHint')"
+          :title="t('admin.accounts.usageWindow.grokFreeQuota24hHint', { limit: formatCompactNumber(grokFreeTokenLimit) })"
           :utilization="grokFreeTokenBar.utilization"
           :show-now-when-idle="true"
           color="emerald"
@@ -632,7 +632,8 @@ import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
 const _usageCache = new Map<number, { data: AccountUsageInfo; ts: number }>()
 const USAGE_CACHE_TTL = 5 * 60 * 1000 // 5 minutes
 // xAI Free billing exposes a window without usage_percent, so estimate it from local tokens.
-const GROK_FREE_TOKEN_LIMIT = 2_000_000
+// Current servers return the active limit; the fallback keeps older deployments readable.
+const DEFAULT_GROK_FREE_TOKEN_LIMIT = 1_000_000
 
 const props = withDefaults(
   defineProps<{
@@ -1102,6 +1103,10 @@ const grokIsFree = computed(() => {
   return billing != null
 })
 const grokFreeQuotaUsage = computed(() => usageInfo.value?.grok_local_usage_24h || null)
+const grokFreeTokenLimit = computed(() => {
+  const value = Number(usageInfo.value?.grok_free_token_limit)
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_GROK_FREE_TOKEN_LIMIT
+})
 const grokLocalUsage = computed(() => {
   if (grokIsFree.value) return grokFreeQuotaUsage.value
   return props.todayStats ||
@@ -1113,7 +1118,7 @@ const grokLocalUsage = computed(() => {
 const grokFreeTokenBar = computed(() => {
   if (!grokIsFree.value || !grokFreeQuotaUsage.value) return null
   const used = Math.max(0, grokFreeQuotaUsage.value.tokens || 0)
-  return { utilization: Math.min(100, (used / GROK_FREE_TOKEN_LIMIT) * 100) }
+  return { utilization: Math.min(100, (used / grokFreeTokenLimit.value) * 100) }
 })
 const grokQuotaUnknown = computed(() => {
   if (props.account.platform !== 'grok') return false

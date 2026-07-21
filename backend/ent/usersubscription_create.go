@@ -245,6 +245,20 @@ func (_c *UserSubscriptionCreate) SetNillableSourceRedeemCodeID(v *int64) *UserS
 	return _c
 }
 
+// SetRevokedByUserID sets the "revoked_by_user_id" field.
+func (_c *UserSubscriptionCreate) SetRevokedByUserID(v int64) *UserSubscriptionCreate {
+	_c.mutation.SetRevokedByUserID(v)
+	return _c
+}
+
+// SetNillableRevokedByUserID sets the "revoked_by_user_id" field if the given value is not nil.
+func (_c *UserSubscriptionCreate) SetNillableRevokedByUserID(v *int64) *UserSubscriptionCreate {
+	if v != nil {
+		_c.SetRevokedByUserID(*v)
+	}
+	return _c
+}
+
 // SetAssignedAt sets the "assigned_at" field.
 func (_c *UserSubscriptionCreate) SetAssignedAt(v time.Time) *UserSubscriptionCreate {
 	_c.mutation.SetAssignedAt(v)
@@ -300,6 +314,11 @@ func (_c *UserSubscriptionCreate) SetNillableAssignedByUserID(id *int64) *UserSu
 // SetAssignedByUser sets the "assigned_by_user" edge to the User entity.
 func (_c *UserSubscriptionCreate) SetAssignedByUser(v *User) *UserSubscriptionCreate {
 	return _c.SetAssignedByUserID(v.ID)
+}
+
+// SetRevokedByUser sets the "revoked_by_user" edge to the User entity.
+func (_c *UserSubscriptionCreate) SetRevokedByUser(v *User) *UserSubscriptionCreate {
+	return _c.SetRevokedByUserID(v.ID)
 }
 
 // AddUsageLogIDs adds the "usage_logs" edge to the UsageLog entity by IDs.
@@ -596,6 +615,23 @@ func (_c *UserSubscriptionCreate) createSpec() (*UserSubscription, *sqlgraph.Cre
 			edge.Target.Nodes = append(edge.Target.Nodes, k)
 		}
 		_node.AssignedBy = &nodes[0]
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.RevokedByUserIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   usersubscription.RevokedByUserTable,
+			Columns: []string{usersubscription.RevokedByUserColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_node.RevokedByUserID = &nodes[0]
 		_spec.Edges = append(_spec.Edges, edge)
 	}
 	if nodes := _c.mutation.UsageLogsIDs(); len(nodes) > 0 {
@@ -939,6 +975,24 @@ func (u *UserSubscriptionUpsert) AddSourceRedeemCodeID(v int64) *UserSubscriptio
 // ClearSourceRedeemCodeID clears the value of the "source_redeem_code_id" field.
 func (u *UserSubscriptionUpsert) ClearSourceRedeemCodeID() *UserSubscriptionUpsert {
 	u.SetNull(usersubscription.FieldSourceRedeemCodeID)
+	return u
+}
+
+// SetRevokedByUserID sets the "revoked_by_user_id" field.
+func (u *UserSubscriptionUpsert) SetRevokedByUserID(v int64) *UserSubscriptionUpsert {
+	u.Set(usersubscription.FieldRevokedByUserID, v)
+	return u
+}
+
+// UpdateRevokedByUserID sets the "revoked_by_user_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsert) UpdateRevokedByUserID() *UserSubscriptionUpsert {
+	u.SetExcluded(usersubscription.FieldRevokedByUserID)
+	return u
+}
+
+// ClearRevokedByUserID clears the value of the "revoked_by_user_id" field.
+func (u *UserSubscriptionUpsert) ClearRevokedByUserID() *UserSubscriptionUpsert {
+	u.SetNull(usersubscription.FieldRevokedByUserID)
 	return u
 }
 
@@ -1336,6 +1390,27 @@ func (u *UserSubscriptionUpsertOne) UpdateSourceRedeemCodeID() *UserSubscription
 func (u *UserSubscriptionUpsertOne) ClearSourceRedeemCodeID() *UserSubscriptionUpsertOne {
 	return u.Update(func(s *UserSubscriptionUpsert) {
 		s.ClearSourceRedeemCodeID()
+	})
+}
+
+// SetRevokedByUserID sets the "revoked_by_user_id" field.
+func (u *UserSubscriptionUpsertOne) SetRevokedByUserID(v int64) *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetRevokedByUserID(v)
+	})
+}
+
+// UpdateRevokedByUserID sets the "revoked_by_user_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertOne) UpdateRevokedByUserID() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateRevokedByUserID()
+	})
+}
+
+// ClearRevokedByUserID clears the value of the "revoked_by_user_id" field.
+func (u *UserSubscriptionUpsertOne) ClearRevokedByUserID() *UserSubscriptionUpsertOne {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearRevokedByUserID()
 	})
 }
 
@@ -1904,6 +1979,27 @@ func (u *UserSubscriptionUpsertBulk) UpdateSourceRedeemCodeID() *UserSubscriptio
 func (u *UserSubscriptionUpsertBulk) ClearSourceRedeemCodeID() *UserSubscriptionUpsertBulk {
 	return u.Update(func(s *UserSubscriptionUpsert) {
 		s.ClearSourceRedeemCodeID()
+	})
+}
+
+// SetRevokedByUserID sets the "revoked_by_user_id" field.
+func (u *UserSubscriptionUpsertBulk) SetRevokedByUserID(v int64) *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.SetRevokedByUserID(v)
+	})
+}
+
+// UpdateRevokedByUserID sets the "revoked_by_user_id" field to the value that was provided on create.
+func (u *UserSubscriptionUpsertBulk) UpdateRevokedByUserID() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.UpdateRevokedByUserID()
+	})
+}
+
+// ClearRevokedByUserID clears the value of the "revoked_by_user_id" field.
+func (u *UserSubscriptionUpsertBulk) ClearRevokedByUserID() *UserSubscriptionUpsertBulk {
+	return u.Update(func(s *UserSubscriptionUpsert) {
+		s.ClearRevokedByUserID()
 	})
 }
 

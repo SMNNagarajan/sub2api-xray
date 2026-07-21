@@ -338,6 +338,26 @@ func (_u *UserSubscriptionUpdate) ClearSourceRedeemCodeID() *UserSubscriptionUpd
 	return _u
 }
 
+// SetRevokedByUserID sets the "revoked_by_user_id" field.
+func (_u *UserSubscriptionUpdate) SetRevokedByUserID(v int64) *UserSubscriptionUpdate {
+	_u.mutation.SetRevokedByUserID(v)
+	return _u
+}
+
+// SetNillableRevokedByUserID sets the "revoked_by_user_id" field if the given value is not nil.
+func (_u *UserSubscriptionUpdate) SetNillableRevokedByUserID(v *int64) *UserSubscriptionUpdate {
+	if v != nil {
+		_u.SetRevokedByUserID(*v)
+	}
+	return _u
+}
+
+// ClearRevokedByUserID clears the value of the "revoked_by_user_id" field.
+func (_u *UserSubscriptionUpdate) ClearRevokedByUserID() *UserSubscriptionUpdate {
+	_u.mutation.ClearRevokedByUserID()
+	return _u
+}
+
 // SetAssignedAt sets the "assigned_at" field.
 func (_u *UserSubscriptionUpdate) SetAssignedAt(v time.Time) *UserSubscriptionUpdate {
 	_u.mutation.SetAssignedAt(v)
@@ -401,6 +421,11 @@ func (_u *UserSubscriptionUpdate) SetAssignedByUser(v *User) *UserSubscriptionUp
 	return _u.SetAssignedByUserID(v.ID)
 }
 
+// SetRevokedByUser sets the "revoked_by_user" edge to the User entity.
+func (_u *UserSubscriptionUpdate) SetRevokedByUser(v *User) *UserSubscriptionUpdate {
+	return _u.SetRevokedByUserID(v.ID)
+}
+
 // AddUsageLogIDs adds the "usage_logs" edge to the UsageLog entity by IDs.
 func (_u *UserSubscriptionUpdate) AddUsageLogIDs(ids ...int64) *UserSubscriptionUpdate {
 	_u.mutation.AddUsageLogIDs(ids...)
@@ -436,6 +461,12 @@ func (_u *UserSubscriptionUpdate) ClearGroup() *UserSubscriptionUpdate {
 // ClearAssignedByUser clears the "assigned_by_user" edge to the User entity.
 func (_u *UserSubscriptionUpdate) ClearAssignedByUser() *UserSubscriptionUpdate {
 	_u.mutation.ClearAssignedByUser()
+	return _u
+}
+
+// ClearRevokedByUser clears the "revoked_by_user" edge to the User entity.
+func (_u *UserSubscriptionUpdate) ClearRevokedByUser() *UserSubscriptionUpdate {
+	_u.mutation.ClearRevokedByUser()
 	return _u
 }
 
@@ -696,6 +727,35 @@ func (_u *UserSubscriptionUpdate) sqlSave(ctx context.Context) (_node int, err e
 			Inverse: true,
 			Table:   usersubscription.AssignedByUserTable,
 			Columns: []string{usersubscription.AssignedByUserColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.RevokedByUserCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   usersubscription.RevokedByUserTable,
+			Columns: []string{usersubscription.RevokedByUserColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RevokedByUserIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   usersubscription.RevokedByUserTable,
+			Columns: []string{usersubscription.RevokedByUserColumn},
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
@@ -1078,6 +1138,26 @@ func (_u *UserSubscriptionUpdateOne) ClearSourceRedeemCodeID() *UserSubscription
 	return _u
 }
 
+// SetRevokedByUserID sets the "revoked_by_user_id" field.
+func (_u *UserSubscriptionUpdateOne) SetRevokedByUserID(v int64) *UserSubscriptionUpdateOne {
+	_u.mutation.SetRevokedByUserID(v)
+	return _u
+}
+
+// SetNillableRevokedByUserID sets the "revoked_by_user_id" field if the given value is not nil.
+func (_u *UserSubscriptionUpdateOne) SetNillableRevokedByUserID(v *int64) *UserSubscriptionUpdateOne {
+	if v != nil {
+		_u.SetRevokedByUserID(*v)
+	}
+	return _u
+}
+
+// ClearRevokedByUserID clears the value of the "revoked_by_user_id" field.
+func (_u *UserSubscriptionUpdateOne) ClearRevokedByUserID() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearRevokedByUserID()
+	return _u
+}
+
 // SetAssignedAt sets the "assigned_at" field.
 func (_u *UserSubscriptionUpdateOne) SetAssignedAt(v time.Time) *UserSubscriptionUpdateOne {
 	_u.mutation.SetAssignedAt(v)
@@ -1141,6 +1221,11 @@ func (_u *UserSubscriptionUpdateOne) SetAssignedByUser(v *User) *UserSubscriptio
 	return _u.SetAssignedByUserID(v.ID)
 }
 
+// SetRevokedByUser sets the "revoked_by_user" edge to the User entity.
+func (_u *UserSubscriptionUpdateOne) SetRevokedByUser(v *User) *UserSubscriptionUpdateOne {
+	return _u.SetRevokedByUserID(v.ID)
+}
+
 // AddUsageLogIDs adds the "usage_logs" edge to the UsageLog entity by IDs.
 func (_u *UserSubscriptionUpdateOne) AddUsageLogIDs(ids ...int64) *UserSubscriptionUpdateOne {
 	_u.mutation.AddUsageLogIDs(ids...)
@@ -1176,6 +1261,12 @@ func (_u *UserSubscriptionUpdateOne) ClearGroup() *UserSubscriptionUpdateOne {
 // ClearAssignedByUser clears the "assigned_by_user" edge to the User entity.
 func (_u *UserSubscriptionUpdateOne) ClearAssignedByUser() *UserSubscriptionUpdateOne {
 	_u.mutation.ClearAssignedByUser()
+	return _u
+}
+
+// ClearRevokedByUser clears the "revoked_by_user" edge to the User entity.
+func (_u *UserSubscriptionUpdateOne) ClearRevokedByUser() *UserSubscriptionUpdateOne {
+	_u.mutation.ClearRevokedByUser()
 	return _u
 }
 
@@ -1466,6 +1557,35 @@ func (_u *UserSubscriptionUpdateOne) sqlSave(ctx context.Context) (_node *UserSu
 			Inverse: true,
 			Table:   usersubscription.AssignedByUserTable,
 			Columns: []string{usersubscription.AssignedByUserColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.RevokedByUserCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   usersubscription.RevokedByUserTable,
+			Columns: []string{usersubscription.RevokedByUserColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RevokedByUserIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.M2O,
+			Inverse: true,
+			Table:   usersubscription.RevokedByUserTable,
+			Columns: []string{usersubscription.RevokedByUserColumn},
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(user.FieldID, field.TypeInt64),

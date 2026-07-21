@@ -48432,6 +48432,9 @@ type UserMutation struct {
 	assigned_subscriptions        map[int64]struct{}
 	removedassigned_subscriptions map[int64]struct{}
 	clearedassigned_subscriptions bool
+	revoked_subscriptions         map[int64]struct{}
+	removedrevoked_subscriptions  map[int64]struct{}
+	clearedrevoked_subscriptions  bool
 	announcement_reads            map[int64]struct{}
 	removedannouncement_reads     map[int64]struct{}
 	clearedannouncement_reads     bool
@@ -49844,6 +49847,60 @@ func (m *UserMutation) ResetAssignedSubscriptions() {
 	m.removedassigned_subscriptions = nil
 }
 
+// AddRevokedSubscriptionIDs adds the "revoked_subscriptions" edge to the UserSubscription entity by ids.
+func (m *UserMutation) AddRevokedSubscriptionIDs(ids ...int64) {
+	if m.revoked_subscriptions == nil {
+		m.revoked_subscriptions = make(map[int64]struct{})
+	}
+	for i := range ids {
+		m.revoked_subscriptions[ids[i]] = struct{}{}
+	}
+}
+
+// ClearRevokedSubscriptions clears the "revoked_subscriptions" edge to the UserSubscription entity.
+func (m *UserMutation) ClearRevokedSubscriptions() {
+	m.clearedrevoked_subscriptions = true
+}
+
+// RevokedSubscriptionsCleared reports if the "revoked_subscriptions" edge to the UserSubscription entity was cleared.
+func (m *UserMutation) RevokedSubscriptionsCleared() bool {
+	return m.clearedrevoked_subscriptions
+}
+
+// RemoveRevokedSubscriptionIDs removes the "revoked_subscriptions" edge to the UserSubscription entity by IDs.
+func (m *UserMutation) RemoveRevokedSubscriptionIDs(ids ...int64) {
+	if m.removedrevoked_subscriptions == nil {
+		m.removedrevoked_subscriptions = make(map[int64]struct{})
+	}
+	for i := range ids {
+		delete(m.revoked_subscriptions, ids[i])
+		m.removedrevoked_subscriptions[ids[i]] = struct{}{}
+	}
+}
+
+// RemovedRevokedSubscriptions returns the removed IDs of the "revoked_subscriptions" edge to the UserSubscription entity.
+func (m *UserMutation) RemovedRevokedSubscriptionsIDs() (ids []int64) {
+	for id := range m.removedrevoked_subscriptions {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// RevokedSubscriptionsIDs returns the "revoked_subscriptions" edge IDs in the mutation.
+func (m *UserMutation) RevokedSubscriptionsIDs() (ids []int64) {
+	for id := range m.revoked_subscriptions {
+		ids = append(ids, id)
+	}
+	return
+}
+
+// ResetRevokedSubscriptions resets all changes to the "revoked_subscriptions" edge.
+func (m *UserMutation) ResetRevokedSubscriptions() {
+	m.revoked_subscriptions = nil
+	m.clearedrevoked_subscriptions = false
+	m.removedrevoked_subscriptions = nil
+}
+
 // AddAnnouncementReadIDs adds the "announcement_reads" edge to the AnnouncementRead entity by ids.
 func (m *UserMutation) AddAnnouncementReadIDs(ids ...int64) {
 	if m.announcement_reads == nil {
@@ -51022,7 +51079,7 @@ func (m *UserMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *UserMutation) AddedEdges() []string {
-	edges := make([]string, 0, 14)
+	edges := make([]string, 0, 15)
 	if m.api_keys != nil {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -51034,6 +51091,9 @@ func (m *UserMutation) AddedEdges() []string {
 	}
 	if m.assigned_subscriptions != nil {
 		edges = append(edges, user.EdgeAssignedSubscriptions)
+	}
+	if m.revoked_subscriptions != nil {
+		edges = append(edges, user.EdgeRevokedSubscriptions)
 	}
 	if m.announcement_reads != nil {
 		edges = append(edges, user.EdgeAnnouncementReads)
@@ -51093,6 +51153,12 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 	case user.EdgeAssignedSubscriptions:
 		ids := make([]ent.Value, 0, len(m.assigned_subscriptions))
 		for id := range m.assigned_subscriptions {
+			ids = append(ids, id)
+		}
+		return ids
+	case user.EdgeRevokedSubscriptions:
+		ids := make([]ent.Value, 0, len(m.revoked_subscriptions))
+		for id := range m.revoked_subscriptions {
 			ids = append(ids, id)
 		}
 		return ids
@@ -51162,7 +51228,7 @@ func (m *UserMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *UserMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 14)
+	edges := make([]string, 0, 15)
 	if m.removedapi_keys != nil {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -51174,6 +51240,9 @@ func (m *UserMutation) RemovedEdges() []string {
 	}
 	if m.removedassigned_subscriptions != nil {
 		edges = append(edges, user.EdgeAssignedSubscriptions)
+	}
+	if m.removedrevoked_subscriptions != nil {
+		edges = append(edges, user.EdgeRevokedSubscriptions)
 	}
 	if m.removedannouncement_reads != nil {
 		edges = append(edges, user.EdgeAnnouncementReads)
@@ -51233,6 +51302,12 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 	case user.EdgeAssignedSubscriptions:
 		ids := make([]ent.Value, 0, len(m.removedassigned_subscriptions))
 		for id := range m.removedassigned_subscriptions {
+			ids = append(ids, id)
+		}
+		return ids
+	case user.EdgeRevokedSubscriptions:
+		ids := make([]ent.Value, 0, len(m.removedrevoked_subscriptions))
+		for id := range m.removedrevoked_subscriptions {
 			ids = append(ids, id)
 		}
 		return ids
@@ -51302,7 +51377,7 @@ func (m *UserMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *UserMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 14)
+	edges := make([]string, 0, 15)
 	if m.clearedapi_keys {
 		edges = append(edges, user.EdgeAPIKeys)
 	}
@@ -51314,6 +51389,9 @@ func (m *UserMutation) ClearedEdges() []string {
 	}
 	if m.clearedassigned_subscriptions {
 		edges = append(edges, user.EdgeAssignedSubscriptions)
+	}
+	if m.clearedrevoked_subscriptions {
+		edges = append(edges, user.EdgeRevokedSubscriptions)
 	}
 	if m.clearedannouncement_reads {
 		edges = append(edges, user.EdgeAnnouncementReads)
@@ -51360,6 +51438,8 @@ func (m *UserMutation) EdgeCleared(name string) bool {
 		return m.clearedsubscriptions
 	case user.EdgeAssignedSubscriptions:
 		return m.clearedassigned_subscriptions
+	case user.EdgeRevokedSubscriptions:
+		return m.clearedrevoked_subscriptions
 	case user.EdgeAnnouncementReads:
 		return m.clearedannouncement_reads
 	case user.EdgeAllowedGroups:
@@ -51407,6 +51487,9 @@ func (m *UserMutation) ResetEdge(name string) error {
 		return nil
 	case user.EdgeAssignedSubscriptions:
 		m.ResetAssignedSubscriptions()
+		return nil
+	case user.EdgeRevokedSubscriptions:
+		m.ResetRevokedSubscriptions()
 		return nil
 	case user.EdgeAnnouncementReads:
 		m.ResetAnnouncementReads()
@@ -55115,6 +55198,8 @@ type UserSubscriptionMutation struct {
 	clearedgroup             bool
 	assigned_by_user         *int64
 	clearedassigned_by_user  bool
+	revoked_by_user          *int64
+	clearedrevoked_by_user   bool
 	usage_logs               map[int64]struct{}
 	removedusage_logs        map[int64]struct{}
 	clearedusage_logs        bool
@@ -56062,6 +56147,55 @@ func (m *UserSubscriptionMutation) ResetSourceRedeemCodeID() {
 	delete(m.clearedFields, usersubscription.FieldSourceRedeemCodeID)
 }
 
+// SetRevokedByUserID sets the "revoked_by_user_id" field.
+func (m *UserSubscriptionMutation) SetRevokedByUserID(i int64) {
+	m.revoked_by_user = &i
+}
+
+// RevokedByUserID returns the value of the "revoked_by_user_id" field in the mutation.
+func (m *UserSubscriptionMutation) RevokedByUserID() (r int64, exists bool) {
+	v := m.revoked_by_user
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldRevokedByUserID returns the old "revoked_by_user_id" field's value of the UserSubscription entity.
+// If the UserSubscription object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *UserSubscriptionMutation) OldRevokedByUserID(ctx context.Context) (v *int64, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldRevokedByUserID is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldRevokedByUserID requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldRevokedByUserID: %w", err)
+	}
+	return oldValue.RevokedByUserID, nil
+}
+
+// ClearRevokedByUserID clears the value of the "revoked_by_user_id" field.
+func (m *UserSubscriptionMutation) ClearRevokedByUserID() {
+	m.revoked_by_user = nil
+	m.clearedFields[usersubscription.FieldRevokedByUserID] = struct{}{}
+}
+
+// RevokedByUserIDCleared returns if the "revoked_by_user_id" field was cleared in this mutation.
+func (m *UserSubscriptionMutation) RevokedByUserIDCleared() bool {
+	_, ok := m.clearedFields[usersubscription.FieldRevokedByUserID]
+	return ok
+}
+
+// ResetRevokedByUserID resets all changes to the "revoked_by_user_id" field.
+func (m *UserSubscriptionMutation) ResetRevokedByUserID() {
+	m.revoked_by_user = nil
+	delete(m.clearedFields, usersubscription.FieldRevokedByUserID)
+}
+
 // SetAssignedAt sets the "assigned_at" field.
 func (m *UserSubscriptionMutation) SetAssignedAt(t time.Time) {
 	m.assigned_at = &t
@@ -56241,6 +56375,33 @@ func (m *UserSubscriptionMutation) ResetAssignedByUser() {
 	m.clearedassigned_by_user = false
 }
 
+// ClearRevokedByUser clears the "revoked_by_user" edge to the User entity.
+func (m *UserSubscriptionMutation) ClearRevokedByUser() {
+	m.clearedrevoked_by_user = true
+	m.clearedFields[usersubscription.FieldRevokedByUserID] = struct{}{}
+}
+
+// RevokedByUserCleared reports if the "revoked_by_user" edge to the User entity was cleared.
+func (m *UserSubscriptionMutation) RevokedByUserCleared() bool {
+	return m.RevokedByUserIDCleared() || m.clearedrevoked_by_user
+}
+
+// RevokedByUserIDs returns the "revoked_by_user" edge IDs in the mutation.
+// Note that IDs always returns len(IDs) <= 1 for unique edges, and you should use
+// RevokedByUserID instead. It exists only for internal usage by the builders.
+func (m *UserSubscriptionMutation) RevokedByUserIDs() (ids []int64) {
+	if id := m.revoked_by_user; id != nil {
+		ids = append(ids, *id)
+	}
+	return
+}
+
+// ResetRevokedByUser resets all changes to the "revoked_by_user" edge.
+func (m *UserSubscriptionMutation) ResetRevokedByUser() {
+	m.revoked_by_user = nil
+	m.clearedrevoked_by_user = false
+}
+
 // AddUsageLogIDs adds the "usage_logs" edge to the UsageLog entity by ids.
 func (m *UserSubscriptionMutation) AddUsageLogIDs(ids ...int64) {
 	if m.usage_logs == nil {
@@ -56329,7 +56490,7 @@ func (m *UserSubscriptionMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *UserSubscriptionMutation) Fields() []string {
-	fields := make([]string, 0, 20)
+	fields := make([]string, 0, 21)
 	if m.created_at != nil {
 		fields = append(fields, usersubscription.FieldCreatedAt)
 	}
@@ -56384,6 +56545,9 @@ func (m *UserSubscriptionMutation) Fields() []string {
 	if m.source_redeem_code_id != nil {
 		fields = append(fields, usersubscription.FieldSourceRedeemCodeID)
 	}
+	if m.revoked_by_user != nil {
+		fields = append(fields, usersubscription.FieldRevokedByUserID)
+	}
 	if m.assigned_at != nil {
 		fields = append(fields, usersubscription.FieldAssignedAt)
 	}
@@ -56434,6 +56598,8 @@ func (m *UserSubscriptionMutation) Field(name string) (ent.Value, bool) {
 		return m.SourceType()
 	case usersubscription.FieldSourceRedeemCodeID:
 		return m.SourceRedeemCodeID()
+	case usersubscription.FieldRevokedByUserID:
+		return m.RevokedByUserID()
 	case usersubscription.FieldAssignedAt:
 		return m.AssignedAt()
 	case usersubscription.FieldNotes:
@@ -56483,6 +56649,8 @@ func (m *UserSubscriptionMutation) OldField(ctx context.Context, name string) (e
 		return m.OldSourceType(ctx)
 	case usersubscription.FieldSourceRedeemCodeID:
 		return m.OldSourceRedeemCodeID(ctx)
+	case usersubscription.FieldRevokedByUserID:
+		return m.OldRevokedByUserID(ctx)
 	case usersubscription.FieldAssignedAt:
 		return m.OldAssignedAt(ctx)
 	case usersubscription.FieldNotes:
@@ -56622,6 +56790,13 @@ func (m *UserSubscriptionMutation) SetField(name string, value ent.Value) error 
 		}
 		m.SetSourceRedeemCodeID(v)
 		return nil
+	case usersubscription.FieldRevokedByUserID:
+		v, ok := value.(int64)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetRevokedByUserID(v)
+		return nil
 	case usersubscription.FieldAssignedAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -56750,6 +56925,9 @@ func (m *UserSubscriptionMutation) ClearedFields() []string {
 	if m.FieldCleared(usersubscription.FieldSourceRedeemCodeID) {
 		fields = append(fields, usersubscription.FieldSourceRedeemCodeID)
 	}
+	if m.FieldCleared(usersubscription.FieldRevokedByUserID) {
+		fields = append(fields, usersubscription.FieldRevokedByUserID)
+	}
 	if m.FieldCleared(usersubscription.FieldNotes) {
 		fields = append(fields, usersubscription.FieldNotes)
 	}
@@ -56787,6 +56965,9 @@ func (m *UserSubscriptionMutation) ClearField(name string) error {
 		return nil
 	case usersubscription.FieldSourceRedeemCodeID:
 		m.ClearSourceRedeemCodeID()
+		return nil
+	case usersubscription.FieldRevokedByUserID:
+		m.ClearRevokedByUserID()
 		return nil
 	case usersubscription.FieldNotes:
 		m.ClearNotes()
@@ -56853,6 +57034,9 @@ func (m *UserSubscriptionMutation) ResetField(name string) error {
 	case usersubscription.FieldSourceRedeemCodeID:
 		m.ResetSourceRedeemCodeID()
 		return nil
+	case usersubscription.FieldRevokedByUserID:
+		m.ResetRevokedByUserID()
+		return nil
 	case usersubscription.FieldAssignedAt:
 		m.ResetAssignedAt()
 		return nil
@@ -56865,7 +57049,7 @@ func (m *UserSubscriptionMutation) ResetField(name string) error {
 
 // AddedEdges returns all edge names that were set/added in this mutation.
 func (m *UserSubscriptionMutation) AddedEdges() []string {
-	edges := make([]string, 0, 4)
+	edges := make([]string, 0, 5)
 	if m.user != nil {
 		edges = append(edges, usersubscription.EdgeUser)
 	}
@@ -56874,6 +57058,9 @@ func (m *UserSubscriptionMutation) AddedEdges() []string {
 	}
 	if m.assigned_by_user != nil {
 		edges = append(edges, usersubscription.EdgeAssignedByUser)
+	}
+	if m.revoked_by_user != nil {
+		edges = append(edges, usersubscription.EdgeRevokedByUser)
 	}
 	if m.usage_logs != nil {
 		edges = append(edges, usersubscription.EdgeUsageLogs)
@@ -56897,6 +57084,10 @@ func (m *UserSubscriptionMutation) AddedIDs(name string) []ent.Value {
 		if id := m.assigned_by_user; id != nil {
 			return []ent.Value{*id}
 		}
+	case usersubscription.EdgeRevokedByUser:
+		if id := m.revoked_by_user; id != nil {
+			return []ent.Value{*id}
+		}
 	case usersubscription.EdgeUsageLogs:
 		ids := make([]ent.Value, 0, len(m.usage_logs))
 		for id := range m.usage_logs {
@@ -56909,7 +57100,7 @@ func (m *UserSubscriptionMutation) AddedIDs(name string) []ent.Value {
 
 // RemovedEdges returns all edge names that were removed in this mutation.
 func (m *UserSubscriptionMutation) RemovedEdges() []string {
-	edges := make([]string, 0, 4)
+	edges := make([]string, 0, 5)
 	if m.removedusage_logs != nil {
 		edges = append(edges, usersubscription.EdgeUsageLogs)
 	}
@@ -56932,7 +57123,7 @@ func (m *UserSubscriptionMutation) RemovedIDs(name string) []ent.Value {
 
 // ClearedEdges returns all edge names that were cleared in this mutation.
 func (m *UserSubscriptionMutation) ClearedEdges() []string {
-	edges := make([]string, 0, 4)
+	edges := make([]string, 0, 5)
 	if m.cleareduser {
 		edges = append(edges, usersubscription.EdgeUser)
 	}
@@ -56941,6 +57132,9 @@ func (m *UserSubscriptionMutation) ClearedEdges() []string {
 	}
 	if m.clearedassigned_by_user {
 		edges = append(edges, usersubscription.EdgeAssignedByUser)
+	}
+	if m.clearedrevoked_by_user {
+		edges = append(edges, usersubscription.EdgeRevokedByUser)
 	}
 	if m.clearedusage_logs {
 		edges = append(edges, usersubscription.EdgeUsageLogs)
@@ -56958,6 +57152,8 @@ func (m *UserSubscriptionMutation) EdgeCleared(name string) bool {
 		return m.clearedgroup
 	case usersubscription.EdgeAssignedByUser:
 		return m.clearedassigned_by_user
+	case usersubscription.EdgeRevokedByUser:
+		return m.clearedrevoked_by_user
 	case usersubscription.EdgeUsageLogs:
 		return m.clearedusage_logs
 	}
@@ -56977,6 +57173,9 @@ func (m *UserSubscriptionMutation) ClearEdge(name string) error {
 	case usersubscription.EdgeAssignedByUser:
 		m.ClearAssignedByUser()
 		return nil
+	case usersubscription.EdgeRevokedByUser:
+		m.ClearRevokedByUser()
+		return nil
 	}
 	return fmt.Errorf("unknown UserSubscription unique edge %s", name)
 }
@@ -56993,6 +57192,9 @@ func (m *UserSubscriptionMutation) ResetEdge(name string) error {
 		return nil
 	case usersubscription.EdgeAssignedByUser:
 		m.ResetAssignedByUser()
+		return nil
+	case usersubscription.EdgeRevokedByUser:
+		m.ResetRevokedByUser()
 		return nil
 	case usersubscription.EdgeUsageLogs:
 		m.ResetUsageLogs()

@@ -171,12 +171,29 @@ func (s *SubscriptionService) StartSubCacheInvalidationSubscriber(ctx context.Co
 }
 
 func (s *SubscriptionService) invalidateSubscriptionCaches(userID, groupID int64) error {
+	return s.invalidateSubscriptionCachesWithContext(context.Background(), userID, groupID)
+}
+
+// InvalidateSubscriptionCaches is the shared post-commit invalidation path for
+// admin and user-resource subscription mutations. It synchronously clears the
+// local cache, removes the billing cache and publishes the cross-instance
+// invalidation event.
+func (s *SubscriptionService) InvalidateSubscriptionCaches(ctx context.Context, userID, groupID int64) error {
+	if s == nil {
+		return nil
+	}
+	return s.invalidateSubscriptionCachesWithContext(ctx, userID, groupID)
+}
+
+func (s *SubscriptionService) invalidateSubscriptionCachesWithContext(ctx context.Context, userID, groupID int64) error {
 	s.InvalidateSubCacheSync(userID, groupID)
 	if s.billingCacheService == nil {
 		return nil
 	}
-
-	cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cacheCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := s.billingCacheService.InvalidateSubscription(cacheCtx, userID, groupID); err != nil {
 		return fmt.Errorf("invalidate billing subscription cache: %w", err)
@@ -632,7 +649,7 @@ func (s *SubscriptionService) RevokeSubscription(ctx context.Context, subscripti
 	}
 
 	if err := s.invalidateSubscriptionCaches(sub.UserID, sub.GroupID); err != nil {
-		return err
+		log.Printf("Warning: post-commit revoked subscription cache invalidation failed for user %d group %d: %v", sub.UserID, sub.GroupID, err)
 	}
 
 	return nil
@@ -668,7 +685,7 @@ func (s *SubscriptionService) RestoreSubscription(ctx context.Context, subscript
 	}
 
 	if err := s.invalidateSubscriptionCaches(restored.UserID, restored.GroupID); err != nil {
-		return nil, err
+		log.Printf("Warning: post-commit restored subscription cache invalidation failed for user %d group %d: %v", restored.UserID, restored.GroupID, err)
 	}
 	return restored, nil
 }

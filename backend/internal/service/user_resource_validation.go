@@ -346,6 +346,9 @@ func (s *UserResourceService) normalizeAndValidateAccountPayload(ctx context.Con
 	if err := validateUserAccountPlatformType(platform, accountType); err != nil {
 		return err
 	}
+	if err := validateUserAccountCredentials(accountType, state); err != nil {
+		return err
+	}
 	status := strings.ToLower(strings.TrimSpace(urAsString(state["status"])))
 	if err := validateAllowedValue("status", status, StatusActive, StatusDisabled, StatusError); err != nil {
 		return err
@@ -417,17 +420,70 @@ func (s *UserResourceService) normalizeAndValidateAccountPayload(ctx context.Con
 		if err := s.validateOwnedGroupIDs(ctx, ownerID, groupIDs); err != nil {
 			return err
 		}
+		allowedPlatforms := []string{platform}
+		if platform == PlatformAntigravity {
+			extra, _ := state["extra"].(map[string]any)
+			if toBool(extra["mixed_scheduling"]) {
+				allowedPlatforms = []string{PlatformAntigravity, PlatformAnthropic, PlatformGemini}
+			}
+		}
 		var matching int
 		if err := s.db.QueryRowContext(ctx, `
 SELECT COUNT(*) FROM groups
-WHERE owner_user_id = $1 AND id = ANY($2) AND platform = $3 AND deleted_at IS NULL`, ownerID, pq.Array(groupIDs), platform).Scan(&matching); err != nil {
+WHERE owner_user_id = $1 AND id = ANY($2) AND platform = ANY($3) AND deleted_at IS NULL`, ownerID, pq.Array(groupIDs), pq.Array(allowedPlatforms)).Scan(&matching); err != nil {
 			return err
 		}
 		if matching != len(groupIDs) {
 			return invalidUserResourceField("group_ids", "must use groups from the account platform")
 		}
+		if accountType == AccountTypeAPIKey {
+			var oauthOnly int
+			if err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM groups
+WHERE owner_user_id = $1 AND id = ANY($2) AND require_oauth_only = TRUE AND deleted_at IS NULL`, ownerID, pq.Array(groupIDs)).Scan(&oauthOnly); err != nil {
+				return err
+			}
+			if oauthOnly > 0 {
+				return invalidUserResourceField("group_ids", "contains a group that only accepts OAuth accounts")
+			}
+		}
 	}
 	return s.validateAccountReferences(ctx, ownerID, payload)
+}
+
+func validateUserAccountCredentials(accountType string, state map[string]any) error {
+	credentials, _ := state["credentials"].(map[string]any)
+	credential := func(key string) string {
+		return strings.TrimSpace(urAsString(credentials[key]))
+	}
+
+	switch accountType {
+	case AccountTypeAPIKey:
+		apiKey := credential("api_key")
+		if apiKey == "" {
+			return invalidUserResourceField("credentials.api_key", "is required for API key accounts")
+		}
+		if len(apiKey) > 64*1024 {
+			return invalidUserResourceField("credentials.api_key", "must not exceed 64 KiB")
+		}
+	case AccountTypeUpstream:
+		if credential("base_url") == "" {
+			return invalidUserResourceField("credentials.base_url", "is required for upstream accounts")
+		}
+		if credential("api_key") == "" {
+			return invalidUserResourceField("credentials.api_key", "is required for upstream accounts")
+		}
+	case AccountTypeBedrock:
+		if credential("api_key") == "" && (credential("aws_access_key_id") == "" || credential("aws_secret_access_key") == "") {
+			return invalidUserResourceField("credentials", "must include a Bedrock API key or AWS access keys")
+		}
+	case AccountTypeServiceAccount:
+		if credential("service_account_json") == "" && (credential("client_email") == "" || credential("private_key") == "") {
+			return invalidUserResourceField("credentials.service_account_json", "is required for service account credentials")
+		}
+	}
+
+	return nil
 }
 
 func validateUserAccountPlatformType(platform, accountType string) error {

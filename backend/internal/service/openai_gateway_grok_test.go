@@ -1655,11 +1655,6 @@ func TestForwardGrokResponsesInvalidEncryptedContentRecoveryDoesNotOvermatch(t *
 			responseBody: `{"code":"invalid-argument","error":"The provided encrypted_content is invalid."}`,
 		},
 		{
-			name:         "nested OpenAI error shape",
-			requestBody:  `{"model":"grok","input":[{"type":"reasoning","encrypted_content":"cipher"}],"stream":false}`,
-			responseBody: `{"code":"invalid-argument","error":{"message":"Could not decrypt the provided encrypted_content."}}`,
-		},
-		{
 			name:         "request has no encrypted reasoning",
 			requestBody:  `{"model":"grok","input":[{"type":"message","role":"user","content":"hi"}],"stream":false}`,
 			responseBody: matchingError,
@@ -1695,6 +1690,12 @@ func TestForwardGrokResponsesInvalidEncryptedContentRecoveryDoesNotOvermatch(t *
 			require.Len(t, upstream.bodies, 1)
 		})
 	}
+}
+
+func TestIsGrokInvalidEncryptedContentResponseAcceptsNestedErrorMessage(t *testing.T) {
+	body := []byte(`{"code":"invalid-argument","error":{"message":"Could not decrypt the provided encrypted_content."}}`)
+	require.True(t, isGrokInvalidEncryptedContentResponse(http.StatusBadRequest, body))
+	require.False(t, isGrokInvalidEncryptedContentResponse(http.StatusUnauthorized, body))
 }
 
 func TestForwardGrokResponsesInvalidEncryptedContentRetryFailureIsTerminal(t *testing.T) {

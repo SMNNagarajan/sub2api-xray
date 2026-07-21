@@ -51,6 +51,8 @@ const (
 	FieldSourceType = "source_type"
 	// FieldSourceRedeemCodeID holds the string denoting the source_redeem_code_id field in the database.
 	FieldSourceRedeemCodeID = "source_redeem_code_id"
+	// FieldRevokedByUserID holds the string denoting the revoked_by_user_id field in the database.
+	FieldRevokedByUserID = "revoked_by_user_id"
 	// FieldAssignedAt holds the string denoting the assigned_at field in the database.
 	FieldAssignedAt = "assigned_at"
 	// FieldNotes holds the string denoting the notes field in the database.
@@ -61,6 +63,8 @@ const (
 	EdgeGroup = "group"
 	// EdgeAssignedByUser holds the string denoting the assigned_by_user edge name in mutations.
 	EdgeAssignedByUser = "assigned_by_user"
+	// EdgeRevokedByUser holds the string denoting the revoked_by_user edge name in mutations.
+	EdgeRevokedByUser = "revoked_by_user"
 	// EdgeUsageLogs holds the string denoting the usage_logs edge name in mutations.
 	EdgeUsageLogs = "usage_logs"
 	// Table holds the table name of the usersubscription in the database.
@@ -86,6 +90,13 @@ const (
 	AssignedByUserInverseTable = "users"
 	// AssignedByUserColumn is the table column denoting the assigned_by_user relation/edge.
 	AssignedByUserColumn = "assigned_by"
+	// RevokedByUserTable is the table that holds the revoked_by_user relation/edge.
+	RevokedByUserTable = "user_subscriptions"
+	// RevokedByUserInverseTable is the table name for the User entity.
+	// It exists in this package in order to avoid circular dependency with the "user" package.
+	RevokedByUserInverseTable = "users"
+	// RevokedByUserColumn is the table column denoting the revoked_by_user relation/edge.
+	RevokedByUserColumn = "revoked_by_user_id"
 	// UsageLogsTable is the table that holds the usage_logs relation/edge.
 	UsageLogsTable = "usage_logs"
 	// UsageLogsInverseTable is the table name for the UsageLog entity.
@@ -116,6 +127,7 @@ var Columns = []string{
 	FieldManagedByUserID,
 	FieldSourceType,
 	FieldSourceRedeemCodeID,
+	FieldRevokedByUserID,
 	FieldAssignedAt,
 	FieldNotes,
 }
@@ -260,6 +272,11 @@ func BySourceRedeemCodeID(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldSourceRedeemCodeID, opts...).ToFunc()
 }
 
+// ByRevokedByUserID orders the results by the revoked_by_user_id field.
+func ByRevokedByUserID(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldRevokedByUserID, opts...).ToFunc()
+}
+
 // ByAssignedAt orders the results by the assigned_at field.
 func ByAssignedAt(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldAssignedAt, opts...).ToFunc()
@@ -288,6 +305,13 @@ func ByGroupField(field string, opts ...sql.OrderTermOption) OrderOption {
 func ByAssignedByUserField(field string, opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
 		sqlgraph.OrderByNeighborTerms(s, newAssignedByUserStep(), sql.OrderByField(field, opts...))
+	}
+}
+
+// ByRevokedByUserField orders the results by revoked_by_user field.
+func ByRevokedByUserField(field string, opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newRevokedByUserStep(), sql.OrderByField(field, opts...))
 	}
 }
 
@@ -323,6 +347,13 @@ func newAssignedByUserStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(AssignedByUserInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.M2O, true, AssignedByUserTable, AssignedByUserColumn),
+	)
+}
+func newRevokedByUserStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(RevokedByUserInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.M2O, true, RevokedByUserTable, RevokedByUserColumn),
 	)
 }
 func newUsageLogsStep() *sqlgraph.Step {

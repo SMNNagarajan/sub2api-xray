@@ -274,7 +274,10 @@ func (s *adminServiceImpl) UpdateUser(ctx context.Context, id int64, input *Upda
 	}
 
 	var deprovisioned *userOwnedResourceDeprovision
-	if user.Status == StatusDisabled && oldStatus != StatusDisabled && s.entClient != nil {
+	if user.Status == StatusDisabled && oldStatus != StatusDisabled {
+		if s.entClient == nil {
+			return nil, errors.New("user resource lifecycle database is unavailable")
+		}
 		tx, err := s.entClient.Tx(ctx)
 		if err != nil {
 			return nil, err
@@ -372,34 +375,30 @@ func (s *adminServiceImpl) DeleteUser(ctx context.Context, id int64) error {
 	if user.Role == "admin" {
 		return errors.New("cannot delete admin user")
 	}
+	if s.entClient == nil {
+		return errors.New("user resource lifecycle database is unavailable")
+	}
 
 	apiKeys, err := s.listUserAPIKeysForDeletion(ctx, id)
 	if err != nil {
 		return err
 	}
-	var deprovisioned *userOwnedResourceDeprovision
-	if s.entClient != nil {
-		tx, err := s.entClient.Tx(ctx)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = tx.Rollback() }()
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
 
-		opCtx := dbent.NewTxContext(ctx, tx)
-		deprovisioned, err = s.disableUserOwnedResources(opCtx, tx.Client(), id)
-		if err != nil {
-			return fmt.Errorf("disable user-owned resources before deletion: %w", err)
-		}
-		if err := s.deleteUserWithAPIKeys(opCtx, id, apiKeys); err != nil {
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return err
-		}
-	} else {
-		if err := s.deleteUserWithAPIKeys(ctx, id, apiKeys); err != nil {
-			return err
-		}
+	opCtx := dbent.NewTxContext(ctx, tx)
+	deprovisioned, err := s.disableUserOwnedResources(opCtx, tx.Client(), id)
+	if err != nil {
+		return fmt.Errorf("disable user-owned resources before deletion: %w", err)
+	}
+	if err := s.deleteUserWithAPIKeys(opCtx, id, apiKeys); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	if deprovisioned != nil {
 		s.finalizeUserOwnedResourceDeprovision(ctx, id, deprovisioned)
@@ -410,7 +409,6 @@ func (s *adminServiceImpl) DeleteUser(ctx context.Context, id int64) error {
 				s.authCacheInvalidator.InvalidateAuthCacheByKey(ctx, keyValue)
 			}
 		}
-		s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, id)
 	}
 	return nil
 }
@@ -498,9 +496,29 @@ func (s *adminServiceImpl) disableUserOwnedResources(ctx context.Context, exec *
 	if _, err := exec.UserSubscription.Update().
 		Where(subPred).
 		SetDeletedAt(now).
+		SetRevokedByUserID(userID).
 		SetUpdatedAt(now).
 		Save(ctx); err != nil {
 		return nil, fmt.Errorf("revoke managed subscriptions: %w", err)
+	}
+	var rawExec interface {
+		ExecContext(context.Context, string, ...any) (sql.Result, error)
+	}
+	if tx := dbent.TxFromContext(ctx); tx != nil {
+		rawExec = tx
+	} else {
+		rawExec = s.db
+	}
+	if rawExec != nil && (len(accountIDs) > 0 || len(groupIDs) > 0) {
+		if _, err := rawExec.ExecContext(ctx, `
+INSERT INTO scheduler_outbox (event_type, account_id, group_id)
+SELECT $1, account_id, NULL FROM unnest($2::bigint[]) AS account_id
+UNION ALL
+SELECT $3, NULL, group_id FROM unnest($4::bigint[]) AS group_id`,
+			SchedulerOutboxEventAccountChanged, pq.Array(accountIDs),
+			SchedulerOutboxEventGroupChanged, pq.Array(groupIDs)); err != nil {
+			return nil, fmt.Errorf("enqueue disabled resource scheduler events: %w", err)
+		}
 	}
 	result := &userOwnedResourceDeprovision{
 		groupIDs: groupIDs, accountIDs: accountIDs, proxyIDs: proxyIDs,
@@ -512,28 +530,47 @@ func (s *adminServiceImpl) disableUserOwnedResources(ctx context.Context, exec *
 	return result, nil
 }
 
+// DisableUserAndOwnedResources is the shared atomic lifecycle entry point used
+// by content-moderation auto-bans as well as administrative workflows.
+func (s *adminServiceImpl) DisableUserAndOwnedResources(ctx context.Context, userID int64) error {
+	if s == nil || s.entClient == nil {
+		return errors.New("user resource lifecycle database is unavailable")
+	}
+	user, err := s.userRepo.GetByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if user.IsAdmin() {
+		return errors.New("cannot disable admin user through automated lifecycle")
+	}
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	opCtx := dbent.NewTxContext(ctx, tx)
+	result, err := s.disableUserOwnedResources(opCtx, tx.Client(), userID)
+	if err != nil {
+		return err
+	}
+	user.Status = StatusDisabled
+	if err := s.userRepo.Update(opCtx, user); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	s.finalizeUserOwnedResourceDeprovision(ctx, userID, result)
+	return nil
+}
+
 func (s *adminServiceImpl) finalizeUserOwnedResourceDeprovision(ctx context.Context, userID int64, result *userOwnedResourceDeprovision) {
 	if result == nil {
 		return
 	}
 	for _, proxyID := range result.proxyIDs {
-		if err := DefaultXrayRuntimeManager().Stop(proxyID); err != nil {
-			logger.LegacyPrintf("service.admin", "stop disabled user-owned xray proxy failed: user_id=%d proxy_id=%d err=%v", userID, proxyID, err)
-		}
-		if err := DefaultSingBoxRuntimeManager().Stop(proxyID); err != nil {
-			logger.LegacyPrintf("service.admin", "stop disabled user-owned sing-box proxy failed: user_id=%d proxy_id=%d err=%v", userID, proxyID, err)
-		}
-	}
-	if s.db != nil && (len(result.accountIDs) > 0 || len(result.groupIDs) > 0) {
-		_, err := s.db.ExecContext(ctx, `
-INSERT INTO scheduler_outbox (event_type, account_id, group_id)
-SELECT $1, account_id, NULL FROM unnest($2::bigint[]) AS account_id
-UNION ALL
-SELECT $3, NULL, group_id FROM unnest($4::bigint[]) AS group_id`,
-			SchedulerOutboxEventAccountChanged, pq.Array(result.accountIDs),
-			SchedulerOutboxEventGroupChanged, pq.Array(result.groupIDs))
-		if err != nil {
-			logger.LegacyPrintf("service.admin", "enqueue disabled user-owned resources failed: user_id=%d err=%v", userID, err)
+		if err := stopProxyRuntimesWithRetry(proxyID); err != nil {
+			logger.LegacyPrintf("service.admin", "stop disabled user-owned proxy runtime failed: user_id=%d proxy_id=%d err=%v", userID, proxyID, err)
 		}
 	}
 	if s.authCacheInvalidator != nil {
@@ -545,7 +582,13 @@ SELECT $3, NULL, group_id FROM unnest($4::bigint[]) AS group_id`,
 			s.authCacheInvalidator.InvalidateAuthCacheByUserID(ctx, sub.userID)
 		}
 	}
-	if s.billingCacheService != nil {
+	if subscriptionService, ok := s.defaultSubAssigner.(*SubscriptionService); ok && subscriptionService != nil {
+		for _, sub := range result.subscriptions {
+			if err := subscriptionService.InvalidateSubscriptionCaches(ctx, sub.userID, sub.groupID); err != nil {
+				logger.LegacyPrintf("service.admin", "invalidate disabled managed subscription failed: user_id=%d group_id=%d err=%v", sub.userID, sub.groupID, err)
+			}
+		}
+	} else if s.billingCacheService != nil {
 		for _, sub := range result.subscriptions {
 			if err := s.billingCacheService.InvalidateSubscription(ctx, sub.userID, sub.groupID); err != nil {
 				logger.LegacyPrintf("service.admin", "invalidate disabled managed subscription failed: user_id=%d group_id=%d err=%v", sub.userID, sub.groupID, err)

@@ -199,7 +199,17 @@ func (m *SingBoxRuntimeManager) Stop(proxyID int64) error {
 	if inst == nil {
 		return nil
 	}
-	return inst.stop()
+	if err := inst.stop(); err != nil {
+		m.mu.Lock()
+		if !m.closed {
+			if _, exists := m.instances[proxyID]; !exists {
+				m.instances[proxyID] = inst
+			}
+		}
+		m.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 func (m *SingBoxRuntimeManager) Close() error {

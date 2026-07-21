@@ -19,6 +19,9 @@ type AdminService interface {
 	CreateUser(ctx context.Context, input *CreateUserInput) (*User, error)
 	UpdateUser(ctx context.Context, id int64, input *UpdateUserInput) (*User, error)
 	DeleteUser(ctx context.Context, id int64) error
+	// DisableUserAndOwnedResources atomically disables the user and every
+	// private resource owned or managed by that user.
+	DisableUserAndOwnedResources(ctx context.Context, userID int64) error
 	UpdateUserBalance(ctx context.Context, userID int64, balance float64, operation string, notes string) (*User, error)
 	BatchUpdateConcurrency(ctx context.Context, userIDs []int64, value int, mode string) (int, error)
 	BatchUpdateLimits(ctx context.Context, userIDs []int64, concurrency, rpmLimit *int) (int, error)
@@ -581,6 +584,14 @@ var proxyQualityTargets = []proxyQualityTarget{
 		Method: http.MethodGet,
 		AllowedStatuses: map[int]struct{}{
 			http.StatusOK: {},
+		},
+	},
+	{
+		Target: "grok",
+		URL:    "https://api.x.ai/v1/models",
+		Method: http.MethodGet,
+		AllowedStatuses: map[int]struct{}{
+			http.StatusUnauthorized: {},
 		},
 	},
 }

@@ -7,11 +7,19 @@ const {
   probeUpstreamBillingMock,
   importCodexSessionMock,
   createOpenAICodexPATMock,
+  userApiPostMock,
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
   probeUpstreamBillingMock: vi.fn(),
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
+  userApiPostMock: vi.fn(),
+}))
+
+vi.mock('@/api/client', () => ({
+  apiClient: {
+    post: userApiPostMock,
+  },
 }))
 
 vi.mock('@/stores/app', () => ({
@@ -84,9 +92,9 @@ const OAuthAuthorizationFlowStub = defineComponent({
   `,
 })
 
-function mountModal() {
+function mountModal(scope: 'admin' | 'user' = 'admin') {
   return mount(CreateAccountModal, {
-    props: { show: true, proxies: [], groups: [] },
+    props: { show: true, proxies: [], groups: [], scope },
     global: {
       stubs: {
         BaseDialog: BaseDialogStub,
@@ -134,8 +142,8 @@ async function submitApiKeyAccount(
   return wrapper
 }
 
-async function openCodexImportStep(toggleClicks = 0) {
-  const wrapper = mountModal()
+async function openCodexImportStep(toggleClicks = 0, scope: 'admin' | 'user' = 'admin') {
+  const wrapper = mountModal(scope)
   await selectButtonByText(wrapper, 'OpenAI')
   for (let click = 0; click < toggleClicks; click += 1) {
     await wrapper.get('[data-testid="openai-long-context-billing-toggle"]').trigger('click')
@@ -158,6 +166,63 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       warnings: [],
     })
     createOpenAICodexPATMock.mockReset().mockResolvedValue({})
+    userApiPostMock.mockReset().mockResolvedValue({
+      data: { id: 43, platform: 'openai', type: 'apikey' },
+    })
+  })
+
+  it('creates a user-scoped OpenAI Responses API account through /my/accounts', async () => {
+    const wrapper = mountModal('user')
+    await selectButtonByText(wrapper, 'OpenAI')
+    await selectButtonByText(wrapper, 'API Key')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('User OpenAI account')
+    await wrapper.get('form#create-account-form input[type="password"]').setValue('test-user-api-key')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+
+    expect(userApiPostMock).toHaveBeenCalledTimes(1)
+    expect(userApiPostMock.mock.calls[0]?.[0]).toBe('/my/accounts')
+    expect(userApiPostMock.mock.calls[0]?.[0]).not.toContain('/admin/accounts')
+    expect(userApiPostMock.mock.calls[0]?.[1]).toMatchObject({
+      name: 'User OpenAI account',
+      platform: 'openai',
+      type: 'apikey',
+      extra: {
+        upstream_billing_probe_enabled: true,
+      },
+    })
+    expect(userApiPostMock.mock.calls[0]?.[1]?.upstream_billing_probe_enabled).toBeUndefined()
+    expect(createAccountMock).not.toHaveBeenCalled()
+  })
+
+  it('hides Agent Identity for user scope until the user importer supports it', async () => {
+    const wrapper = mountModal('user')
+    await selectButtonByText(wrapper, 'OpenAI')
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('User Codex account')
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+
+    expect(wrapper.getComponent(OAuthAuthorizationFlowStub).props('showAgentIdentityOption')).toBe(false)
+  })
+
+  it('accepts the user Codex import response contract', async () => {
+    userApiPostMock.mockResolvedValueOnce({
+      data: {
+        created: [{ id: 44, name: 'Imported Codex account' }],
+        errors: [],
+        created_count: 1,
+        failed_count: 0,
+      },
+    })
+    const wrapper = await openCodexImportStep(0, 'user')
+
+    await wrapper.get('[data-testid="import-codex-session"]').trigger('click')
+    await flushPromises()
+
+    expect(userApiPostMock).toHaveBeenCalledWith(
+      '/my/accounts/import/codex-session',
+      expect.objectContaining({ content: 'session-json' }),
+    )
+    expect(wrapper.emitted('created')).toHaveLength(1)
   })
 
   it('sends false explicitly for normal OpenAI account creation by default', async () => {

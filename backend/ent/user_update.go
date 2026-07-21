@@ -493,6 +493,21 @@ func (_u *UserUpdate) AddAssignedSubscriptions(v ...*UserSubscription) *UserUpda
 	return _u.AddAssignedSubscriptionIDs(ids...)
 }
 
+// AddRevokedSubscriptionIDs adds the "revoked_subscriptions" edge to the UserSubscription entity by IDs.
+func (_u *UserUpdate) AddRevokedSubscriptionIDs(ids ...int64) *UserUpdate {
+	_u.mutation.AddRevokedSubscriptionIDs(ids...)
+	return _u
+}
+
+// AddRevokedSubscriptions adds the "revoked_subscriptions" edges to the UserSubscription entity.
+func (_u *UserUpdate) AddRevokedSubscriptions(v ...*UserSubscription) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddRevokedSubscriptionIDs(ids...)
+}
+
 // AddAnnouncementReadIDs adds the "announcement_reads" edge to the AnnouncementRead entity by IDs.
 func (_u *UserUpdate) AddAnnouncementReadIDs(ids ...int64) *UserUpdate {
 	_u.mutation.AddAnnouncementReadIDs(ids...)
@@ -730,6 +745,27 @@ func (_u *UserUpdate) RemoveAssignedSubscriptions(v ...*UserSubscription) *UserU
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveAssignedSubscriptionIDs(ids...)
+}
+
+// ClearRevokedSubscriptions clears all "revoked_subscriptions" edges to the UserSubscription entity.
+func (_u *UserUpdate) ClearRevokedSubscriptions() *UserUpdate {
+	_u.mutation.ClearRevokedSubscriptions()
+	return _u
+}
+
+// RemoveRevokedSubscriptionIDs removes the "revoked_subscriptions" edge to UserSubscription entities by IDs.
+func (_u *UserUpdate) RemoveRevokedSubscriptionIDs(ids ...int64) *UserUpdate {
+	_u.mutation.RemoveRevokedSubscriptionIDs(ids...)
+	return _u
+}
+
+// RemoveRevokedSubscriptions removes "revoked_subscriptions" edges to UserSubscription entities.
+func (_u *UserUpdate) RemoveRevokedSubscriptions(v ...*UserSubscription) *UserUpdate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveRevokedSubscriptionIDs(ids...)
 }
 
 // ClearAnnouncementReads clears all "announcement_reads" edges to the AnnouncementRead entity.
@@ -1306,6 +1342,51 @@ func (_u *UserUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 			Inverse: false,
 			Table:   user.AssignedSubscriptionsTable,
 			Columns: []string{user.AssignedSubscriptionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(usersubscription.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.RevokedSubscriptionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.RevokedSubscriptionsTable,
+			Columns: []string{user.RevokedSubscriptionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(usersubscription.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedRevokedSubscriptionsIDs(); len(nodes) > 0 && !_u.mutation.RevokedSubscriptionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.RevokedSubscriptionsTable,
+			Columns: []string{user.RevokedSubscriptionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(usersubscription.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RevokedSubscriptionsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.RevokedSubscriptionsTable,
+			Columns: []string{user.RevokedSubscriptionsColumn},
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(usersubscription.FieldID, field.TypeInt64),
@@ -2250,6 +2331,21 @@ func (_u *UserUpdateOne) AddAssignedSubscriptions(v ...*UserSubscription) *UserU
 	return _u.AddAssignedSubscriptionIDs(ids...)
 }
 
+// AddRevokedSubscriptionIDs adds the "revoked_subscriptions" edge to the UserSubscription entity by IDs.
+func (_u *UserUpdateOne) AddRevokedSubscriptionIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.AddRevokedSubscriptionIDs(ids...)
+	return _u
+}
+
+// AddRevokedSubscriptions adds the "revoked_subscriptions" edges to the UserSubscription entity.
+func (_u *UserUpdateOne) AddRevokedSubscriptions(v ...*UserSubscription) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.AddRevokedSubscriptionIDs(ids...)
+}
+
 // AddAnnouncementReadIDs adds the "announcement_reads" edge to the AnnouncementRead entity by IDs.
 func (_u *UserUpdateOne) AddAnnouncementReadIDs(ids ...int64) *UserUpdateOne {
 	_u.mutation.AddAnnouncementReadIDs(ids...)
@@ -2487,6 +2583,27 @@ func (_u *UserUpdateOne) RemoveAssignedSubscriptions(v ...*UserSubscription) *Us
 		ids[i] = v[i].ID
 	}
 	return _u.RemoveAssignedSubscriptionIDs(ids...)
+}
+
+// ClearRevokedSubscriptions clears all "revoked_subscriptions" edges to the UserSubscription entity.
+func (_u *UserUpdateOne) ClearRevokedSubscriptions() *UserUpdateOne {
+	_u.mutation.ClearRevokedSubscriptions()
+	return _u
+}
+
+// RemoveRevokedSubscriptionIDs removes the "revoked_subscriptions" edge to UserSubscription entities by IDs.
+func (_u *UserUpdateOne) RemoveRevokedSubscriptionIDs(ids ...int64) *UserUpdateOne {
+	_u.mutation.RemoveRevokedSubscriptionIDs(ids...)
+	return _u
+}
+
+// RemoveRevokedSubscriptions removes "revoked_subscriptions" edges to UserSubscription entities.
+func (_u *UserUpdateOne) RemoveRevokedSubscriptions(v ...*UserSubscription) *UserUpdateOne {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _u.RemoveRevokedSubscriptionIDs(ids...)
 }
 
 // ClearAnnouncementReads clears all "announcement_reads" edges to the AnnouncementRead entity.
@@ -3093,6 +3210,51 @@ func (_u *UserUpdateOne) sqlSave(ctx context.Context) (_node *User, err error) {
 			Inverse: false,
 			Table:   user.AssignedSubscriptionsTable,
 			Columns: []string{user.AssignedSubscriptionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(usersubscription.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Add = append(_spec.Edges.Add, edge)
+	}
+	if _u.mutation.RevokedSubscriptionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.RevokedSubscriptionsTable,
+			Columns: []string{user.RevokedSubscriptionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(usersubscription.FieldID, field.TypeInt64),
+			},
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RemovedRevokedSubscriptionsIDs(); len(nodes) > 0 && !_u.mutation.RevokedSubscriptionsCleared() {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.RevokedSubscriptionsTable,
+			Columns: []string{user.RevokedSubscriptionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(usersubscription.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges.Clear = append(_spec.Edges.Clear, edge)
+	}
+	if nodes := _u.mutation.RevokedSubscriptionsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.RevokedSubscriptionsTable,
+			Columns: []string{user.RevokedSubscriptionsColumn},
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(usersubscription.FieldID, field.TypeInt64),

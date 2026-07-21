@@ -1240,7 +1240,7 @@
 
             <!-- Whitelist Mode -->
             <div v-if="modelRestrictionMode === 'whitelist'">
-              <ModelWhitelistSelector v-model="allowedModels" :platform="form.platform" :sync-credentials="syncPreviewCredentials" />
+              <ModelWhitelistSelector v-model="allowedModels" :platform="form.platform" :scope="props.scope" :sync-credentials="syncPreviewCredentials" />
               <p class="text-xs text-gray-500 dark:text-gray-400">
                 {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
                 <span v-if="allowedModels.length === 0">{{
@@ -1722,7 +1722,7 @@
 
           <!-- Whitelist Mode -->
           <div v-if="modelRestrictionMode === 'whitelist'">
-            <ModelWhitelistSelector v-model="allowedModels" platform="anthropic" :sync-credentials="syncPreviewCredentials" />
+            <ModelWhitelistSelector v-model="allowedModels" platform="anthropic" :scope="props.scope" :sync-credentials="syncPreviewCredentials" />
             <p class="text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
               <span v-if="allowedModels.length === 0">{{ t('admin.accounts.supportsAllModels') }}</span>
@@ -2058,7 +2058,7 @@
 
           <!-- Whitelist Mode -->
           <div v-if="modelRestrictionMode === 'whitelist'">
-            <ModelWhitelistSelector v-model="allowedModels" :platform="form.platform" :sync-credentials="syncPreviewCredentials" />
+            <ModelWhitelistSelector v-model="allowedModels" :platform="form.platform" :scope="props.scope" :sync-credentials="syncPreviewCredentials" />
             <p class="text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
               <span v-if="allowedModels.length === 0">{{
@@ -3139,11 +3139,13 @@
 
         <!-- Group Selection - 仅标准模式显示 -->
         <GroupSelector
-          v-if="!authStore.isSimpleMode"
+          v-if="isUserScope || !authStore.isSimpleMode"
           v-model="form.group_ids"
           :groups="groups"
           :platform="form.platform"
           :mixed-scheduling="mixedScheduling"
+          :owner-user-id="isUserScope ? authStore.user?.id : null"
+          enforce-owner
           data-tour="account-form-groups"
         />
       </div>
@@ -3168,7 +3170,7 @@
         :show-session-token-option="false"
         :show-access-token-option="false"
         :show-codex-session-import-option="form.platform === 'openai'"
-        :show-agent-identity-option="form.platform === 'openai'"
+        :show-agent-identity-option="!isUserScope && form.platform === 'openai'"
         :show-codex-pat-option="form.platform === 'openai'"
         :show-sso-option="!isUserScope && form.platform === 'grok'"
         :show-manual-option="true"
@@ -3561,7 +3563,7 @@ import {
   type HeaderOverrideRow
 } from '@/components/account/credentialsBuilder'
 import { formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
-import { filterAccountCompatibleProxies, toUserAccountPayload } from '@/utils/accountProxyScope'
+import { proxiesForAccountScope, toUserAccountPayload } from '@/utils/accountProxyScope'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import {
@@ -3635,7 +3637,11 @@ const emit = defineEmits<{
 const appStore = useAppStore()
 const isUserScope = computed(() => props.scope === 'user')
 const compatibleProxies = computed(() =>
-  isUserScope.value ? props.proxies : filterAccountCompatibleProxies(props.proxies, null)
+  proxiesForAccountScope(
+    props.proxies,
+    props.scope,
+    isUserScope.value ? authStore.user?.id : null
+  )
 )
 const testUserProxy = (id: number) => myResourcesApi.proxies.test(id)
 
@@ -3663,7 +3669,7 @@ const importScopedCodexPAT = async (payload: OpenAICodexPATCreateRequest): Promi
 // OAuth composables
 const oauth = useAccountOAuth() // For Anthropic OAuth
 const openaiOAuth = useOpenAIOAuth() // For OpenAI OAuth
-const geminiOAuth = useGeminiOAuth() // For Gemini OAuth
+const geminiOAuth = useGeminiOAuth({ scope: props.scope }) // For Gemini OAuth
 const antigravityOAuth = useAntigravityOAuth() // For Antigravity OAuth
 const grokOAuth = useGrokOAuth() // For Grok OAuth
 
@@ -4170,7 +4176,7 @@ watch(
       // Antigravity: 默认使用映射模式并填充默认映射
       if (form.platform === 'antigravity') {
         antigravityModelRestrictionMode.value = 'mapping'
-        fetchAntigravityDefaultMappings().then(mappings => {
+        fetchAntigravityDefaultMappings(props.scope).then(mappings => {
           antigravityModelMappings.value = [...mappings]
         })
         antigravityWhitelistModels.value = []
@@ -4229,7 +4235,7 @@ watch(
     // Antigravity: 默认使用映射模式并填充默认映射
     if (newPlatform === 'antigravity') {
       antigravityModelRestrictionMode.value = 'mapping'
-      fetchAntigravityDefaultMappings().then(mappings => {
+      fetchAntigravityDefaultMappings(props.scope).then(mappings => {
         antigravityModelMappings.value = [...mappings]
       })
       antigravityWhitelistModels.value = []
@@ -4686,7 +4692,7 @@ const resetForm = () => {
 
   antigravityModelRestrictionMode.value = 'mapping'
   antigravityWhitelistModels.value = []
-  fetchAntigravityDefaultMappings().then(mappings => {
+  fetchAntigravityDefaultMappings(props.scope).then(mappings => {
     antigravityModelMappings.value = [...mappings]
   })
   poolModeEnabled.value = false
@@ -5163,14 +5169,20 @@ const handleSubmit = async () => {
   }
 
   form.credentials = credentials
-  const extra = buildAnthropicExtra(buildOpenAIExtra())
+  let extra = buildAnthropicExtra(buildOpenAIExtra())
+  if (isUserScope.value && form.platform === 'openai') {
+    extra = {
+      ...(extra || {}),
+      upstream_billing_probe_enabled: upstreamBillingAutoProbeEnabled.value,
+    }
+  }
 
   await doCreateAccount({
     ...form,
     group_ids: form.group_ids,
     extra,
     upstream_billing_probe_enabled:
-      form.platform === 'openai' ? upstreamBillingAutoProbeEnabled.value : undefined,
+      !isUserScope.value && form.platform === 'openai' ? upstreamBillingAutoProbeEnabled.value : undefined,
     auto_pause_on_expired: autoPauseOnExpired.value
   })
 }
@@ -5626,13 +5638,23 @@ const buildOpenAICodexImportCredentialExtras = (): Record<string, unknown> | nul
   return credentials
 }
 
-const formatCodexImportMessages = (messages?: CodexSessionImportMessage[]) => {
+const formatCodexImportMessages = (messages?: Array<CodexSessionImportMessage | string>) => {
   return (messages || [])
     .map((item) => {
+      if (typeof item === 'string') return item
       const name = item.name ? ` ${item.name}` : ''
       return `#${item.index}${name}: ${item.message}`
     })
     .join('\n')
+}
+
+const codexImportCount = (result: Record<string, any>, countKey: string, valueKey: string): number => {
+  const explicit = Number(result[countKey])
+  if (Number.isFinite(explicit)) return explicit
+  const value = result[valueKey]
+  if (Array.isArray(value)) return value.length
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : 0
 }
 
 const isAgentIdentityImportContent = (content: string) => {
@@ -5698,15 +5720,19 @@ const handleOpenAIImportCodexSession = async (content: string) => {
       update_existing: true
     })
 
-    const successCount = result.created + result.updated
+    const createdCount = codexImportCount(result, 'created_count', 'created')
+    const updatedCount = codexImportCount(result, 'updated_count', 'updated')
+    const skippedCount = codexImportCount(result, 'skipped_count', 'skipped')
+    const failedCount = codexImportCount(result, 'failed_count', 'failed')
+    const successCount = createdCount + updatedCount
     const params = {
-      created: result.created,
-      updated: result.updated,
-      skipped: result.skipped,
-      failed: result.failed
+      created: createdCount,
+      updated: updatedCount,
+      skipped: skippedCount,
+      failed: failedCount
     }
 
-    if (successCount > 0 && result.failed === 0) {
+    if (successCount > 0 && failedCount === 0) {
       appStore.showSuccess(t('admin.accounts.oauth.openai.codexSessionImportSuccess', params))
       emit('created')
       handleClose()
@@ -5717,7 +5743,7 @@ const handleOpenAIImportCodexSession = async (content: string) => {
     const warningText = formatCodexImportMessages(result.warnings)
     oauthClient.error.value = [errorText, warningText].filter(Boolean).join('\n')
 
-    if (result.failed === 0) {
+    if (failedCount === 0) {
       appStore.showWarning(t('admin.accounts.oauth.openai.codexSessionImportSuccess', params))
       return
     }
@@ -6269,9 +6295,14 @@ const handleUserOAuthExchange = async (authCode: string) => {
     if (form.platform === 'openai') {
       if (!isOpenAIModelRestrictionDisabled.value) {
         const modelMapping = buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
-        if (modelMapping) credentials.model_mapping = modelMapping
+      if (modelMapping) credentials.model_mapping = modelMapping
       }
       extra = buildOpenAIExtra(extra)
+    } else if (form.platform === 'grok') {
+      if (!validateGrokOAuthUpstreamConfig()) {
+        return
+      }
+      applyGrokOAuthUpstreamConfig(credentials)
     } else if (form.platform === 'antigravity') {
       applyAntigravityProjectID(credentials, antigravityProjectId.value, 'create')
       applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')

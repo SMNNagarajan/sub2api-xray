@@ -12,6 +12,7 @@ import (
 	entsql "entgo.io/ent/dialect/sql"
 	"github.com/DATA-DOG/go-sqlmock"
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	dbusersubscription "github.com/Wei-Shaw/sub2api/ent/usersubscription"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
@@ -42,6 +43,40 @@ func newFailingDeprovisionClient(t *testing.T, injected error) (*dbent.Client, s
 	mock.ExpectBegin()
 	mock.ExpectQuery(`(?s)SELECT.*FROM "groups"`).WillReturnError(injected)
 	mock.ExpectRollback()
+	return client, mock
+}
+
+func newEmptyDeprovisionClient(t *testing.T, commit bool) (*dbent.Client, sqlmock.Sqlmock) {
+	t.Helper()
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	driver := entsql.OpenDB(dialect.Postgres, db)
+	client := dbent.NewClient(dbent.Driver(driver))
+	t.Cleanup(func() { _ = client.Close() })
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT.*FROM "groups"`).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery(`(?s)SELECT.*FROM "accounts"`).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery(`(?s)SELECT.*FROM "proxies"`).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery(`(?s)SELECT.*FROM "user_subscriptions"`).
+		WillReturnRows(sqlmock.NewRows(dbusersubscription.Columns))
+	mock.ExpectExec(`(?s)UPDATE "proxies" SET`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`(?s)UPDATE "proxy_sources" SET`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`(?s)UPDATE "redeem_codes" SET`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`(?s)UPDATE "user_subscriptions" SET`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	if commit {
+		mock.ExpectCommit()
+	} else {
+		mock.ExpectRollback()
+	}
 	return client, mock
 }
 
@@ -309,13 +344,15 @@ func (s *deleteGroupAPIKeyRepoStub) ListKeysByGroupID(ctx context.Context, group
 }
 
 type proxyRepoStub struct {
-	proxy                 *Proxy
-	deleteErr             error
-	countErr              error
-	accountCount          int64
-	userOwnedAccountCount int64
-	deletedIDs            []int64
-	updated               bool
+	proxy                  *Proxy
+	deleteErr              error
+	countErr               error
+	accountCount           int64
+	userOwnedAccountCount  int64
+	fallbackReferenceCount int64
+	fallbackReferenceErr   error
+	deletedIDs             []int64
+	updated                bool
 }
 
 func (s *proxyRepoStub) Create(ctx context.Context, proxy *Proxy) error {
@@ -373,6 +410,10 @@ func (s *proxyRepoStub) CountAccountsByProxyID(ctx context.Context, proxyID int6
 		return 0, s.countErr
 	}
 	return s.accountCount, nil
+}
+
+func (s *proxyRepoStub) CountFallbackReferencesByProxyID(context.Context, int64) (int64, error) {
+	return s.fallbackReferenceCount, s.fallbackReferenceErr
 }
 
 func (s *proxyRepoStub) CountUserOwnedAccountsByProxyID(ctx context.Context, proxyID int64) (int64, error) {
@@ -576,15 +617,18 @@ func waitForInvalidations(t *testing.T, ch <-chan subscriptionInvalidateCall, ex
 }
 
 func TestAdminService_DeleteUser_Success(t *testing.T) {
+	client, mock := newEmptyDeprovisionClient(t, true)
 	repo := &userRepoStub{user: &User{ID: 7, Role: RoleUser}}
-	svc := &adminServiceImpl{userRepo: repo}
+	svc := &adminServiceImpl{userRepo: repo, entClient: client}
 
 	err := svc.DeleteUser(context.Background(), 7)
 	require.NoError(t, err)
 	require.Equal(t, []int64{7}, repo.deletedIDs)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestAdminService_DeleteUser_DeletesOwnedAPIKeys(t *testing.T) {
+	client, mock := newEmptyDeprovisionClient(t, true)
 	repo := &userRepoStub{user: &User{ID: 7, Role: RoleUser}}
 	apiKeyRepo := &apiKeyRepoStub{
 		allowListByUserID: true,
@@ -598,6 +642,7 @@ func TestAdminService_DeleteUser_DeletesOwnedAPIKeys(t *testing.T) {
 		userRepo:             repo,
 		apiKeyRepo:           apiKeyRepo,
 		authCacheInvalidator: invalidator,
+		entClient:            client,
 	}
 
 	err := svc.DeleteUser(context.Background(), 7)
@@ -607,6 +652,16 @@ func TestAdminService_DeleteUser_DeletesOwnedAPIKeys(t *testing.T) {
 	require.Equal(t, []int64{11, 12}, apiKeyRepo.deletedIDs)
 	require.ElementsMatch(t, []string{"sk-user-1", "sk-user-2"}, invalidator.keys)
 	require.Equal(t, []int64{7}, invalidator.userIDs)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAdminService_DeleteUser_RequiresLifecycleDatabase(t *testing.T) {
+	repo := &userRepoStub{user: &User{ID: 7, Role: RoleUser}}
+	svc := &adminServiceImpl{userRepo: repo}
+
+	err := svc.DeleteUser(context.Background(), 7)
+	require.ErrorContains(t, err, "user resource lifecycle database is unavailable")
+	require.Empty(t, repo.deletedIDs)
 }
 
 func TestAdminService_DeleteUser_NotFound(t *testing.T) {
@@ -629,16 +684,18 @@ func TestAdminService_DeleteUser_AdminGuard(t *testing.T) {
 }
 
 func TestAdminService_DeleteUser_DeleteError(t *testing.T) {
+	client, mock := newEmptyDeprovisionClient(t, false)
 	deleteErr := errors.New("delete failed")
 	repo := &userRepoStub{
 		user:      &User{ID: 9, Role: RoleUser},
 		deleteErr: deleteErr,
 	}
-	svc := &adminServiceImpl{userRepo: repo}
+	svc := &adminServiceImpl{userRepo: repo, entClient: client}
 
 	err := svc.DeleteUser(context.Background(), 9)
 	require.ErrorIs(t, err, deleteErr)
 	require.Equal(t, []int64{9}, repo.deletedIDs)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestAdminService_DeleteGroup_Success_WithCacheInvalidation(t *testing.T) {
@@ -717,6 +774,15 @@ func TestAdminService_DeleteProxy_InUse(t *testing.T) {
 	svc := &adminServiceImpl{proxyRepo: repo}
 
 	err := svc.DeleteProxy(context.Background(), 77)
+	require.ErrorIs(t, err, ErrProxyInUse)
+	require.Empty(t, repo.deletedIDs)
+}
+
+func TestAdminService_DeleteProxy_UsedAsFallback(t *testing.T) {
+	repo := &proxyRepoStub{fallbackReferenceCount: 1}
+	svc := &adminServiceImpl{proxyRepo: repo}
+
+	err := svc.DeleteProxy(context.Background(), 78)
 	require.ErrorIs(t, err, ErrProxyInUse)
 	require.Empty(t, repo.deletedIDs)
 }

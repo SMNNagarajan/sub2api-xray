@@ -145,6 +145,11 @@ func SourceRedeemCodeID(v int64) predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldEQ(FieldSourceRedeemCodeID, v))
 }
 
+// RevokedByUserID applies equality check predicate on the "revoked_by_user_id" field. It's identical to RevokedByUserIDEQ.
+func RevokedByUserID(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldRevokedByUserID, v))
+}
+
 // AssignedAt applies equality check predicate on the "assigned_at" field. It's identical to AssignedAtEQ.
 func AssignedAt(v time.Time) predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldEQ(FieldAssignedAt, v))
@@ -935,6 +940,36 @@ func SourceRedeemCodeIDNotNil() predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldNotNull(FieldSourceRedeemCodeID))
 }
 
+// RevokedByUserIDEQ applies the EQ predicate on the "revoked_by_user_id" field.
+func RevokedByUserIDEQ(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldEQ(FieldRevokedByUserID, v))
+}
+
+// RevokedByUserIDNEQ applies the NEQ predicate on the "revoked_by_user_id" field.
+func RevokedByUserIDNEQ(v int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNEQ(FieldRevokedByUserID, v))
+}
+
+// RevokedByUserIDIn applies the In predicate on the "revoked_by_user_id" field.
+func RevokedByUserIDIn(vs ...int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIn(FieldRevokedByUserID, vs...))
+}
+
+// RevokedByUserIDNotIn applies the NotIn predicate on the "revoked_by_user_id" field.
+func RevokedByUserIDNotIn(vs ...int64) predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotIn(FieldRevokedByUserID, vs...))
+}
+
+// RevokedByUserIDIsNil applies the IsNil predicate on the "revoked_by_user_id" field.
+func RevokedByUserIDIsNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldIsNull(FieldRevokedByUserID))
+}
+
+// RevokedByUserIDNotNil applies the NotNil predicate on the "revoked_by_user_id" field.
+func RevokedByUserIDNotNil() predicate.UserSubscription {
+	return predicate.UserSubscription(sql.FieldNotNull(FieldRevokedByUserID))
+}
+
 // AssignedAtEQ applies the EQ predicate on the "assigned_at" field.
 func AssignedAtEQ(v time.Time) predicate.UserSubscription {
 	return predicate.UserSubscription(sql.FieldEQ(FieldAssignedAt, v))
@@ -1111,6 +1146,29 @@ func HasAssignedByUser() predicate.UserSubscription {
 func HasAssignedByUserWith(preds ...predicate.User) predicate.UserSubscription {
 	return predicate.UserSubscription(func(s *sql.Selector) {
 		step := newAssignedByUserStep()
+		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
+			for _, p := range preds {
+				p(s)
+			}
+		})
+	})
+}
+
+// HasRevokedByUser applies the HasEdge predicate on the "revoked_by_user" edge.
+func HasRevokedByUser() predicate.UserSubscription {
+	return predicate.UserSubscription(func(s *sql.Selector) {
+		step := sqlgraph.NewStep(
+			sqlgraph.From(Table, FieldID),
+			sqlgraph.Edge(sqlgraph.M2O, true, RevokedByUserTable, RevokedByUserColumn),
+		)
+		sqlgraph.HasNeighbors(s, step)
+	})
+}
+
+// HasRevokedByUserWith applies the HasEdge predicate on the "revoked_by_user" edge with a given conditions (other predicates).
+func HasRevokedByUserWith(preds ...predicate.User) predicate.UserSubscription {
+	return predicate.UserSubscription(func(s *sql.Selector) {
+		step := newRevokedByUserStep()
 		sqlgraph.HasNeighborsWith(s, step, func(s *sql.Selector) {
 			for _, p := range preds {
 				p(s)

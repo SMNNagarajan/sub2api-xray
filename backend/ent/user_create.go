@@ -415,6 +415,21 @@ func (_c *UserCreate) AddAssignedSubscriptions(v ...*UserSubscription) *UserCrea
 	return _c.AddAssignedSubscriptionIDs(ids...)
 }
 
+// AddRevokedSubscriptionIDs adds the "revoked_subscriptions" edge to the UserSubscription entity by IDs.
+func (_c *UserCreate) AddRevokedSubscriptionIDs(ids ...int64) *UserCreate {
+	_c.mutation.AddRevokedSubscriptionIDs(ids...)
+	return _c
+}
+
+// AddRevokedSubscriptions adds the "revoked_subscriptions" edges to the UserSubscription entity.
+func (_c *UserCreate) AddRevokedSubscriptions(v ...*UserSubscription) *UserCreate {
+	ids := make([]int64, len(v))
+	for i := range v {
+		ids[i] = v[i].ID
+	}
+	return _c.AddRevokedSubscriptionIDs(ids...)
+}
+
 // AddAnnouncementReadIDs adds the "announcement_reads" edge to the AnnouncementRead entity by IDs.
 func (_c *UserCreate) AddAnnouncementReadIDs(ids ...int64) *UserCreate {
 	_c.mutation.AddAnnouncementReadIDs(ids...)
@@ -938,6 +953,22 @@ func (_c *UserCreate) createSpec() (*User, *sqlgraph.CreateSpec) {
 			Inverse: false,
 			Table:   user.AssignedSubscriptionsTable,
 			Columns: []string{user.AssignedSubscriptionsColumn},
+			Bidi:    false,
+			Target: &sqlgraph.EdgeTarget{
+				IDSpec: sqlgraph.NewFieldSpec(usersubscription.FieldID, field.TypeInt64),
+			},
+		}
+		for _, k := range nodes {
+			edge.Target.Nodes = append(edge.Target.Nodes, k)
+		}
+		_spec.Edges = append(_spec.Edges, edge)
+	}
+	if nodes := _c.mutation.RevokedSubscriptionsIDs(); len(nodes) > 0 {
+		edge := &sqlgraph.EdgeSpec{
+			Rel:     sqlgraph.O2M,
+			Inverse: false,
+			Table:   user.RevokedSubscriptionsTable,
+			Columns: []string{user.RevokedSubscriptionsColumn},
 			Bidi:    false,
 			Target: &sqlgraph.EdgeTarget{
 				IDSpec: sqlgraph.NewFieldSpec(usersubscription.FieldID, field.TypeInt64),

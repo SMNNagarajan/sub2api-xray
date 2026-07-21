@@ -6,7 +6,9 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1246,7 +1248,14 @@ func normalizeProxyURL(raw string) (string, *url.URL, error) {
 			parsed.Host = hostname
 		}
 	}
-	return parsed.String(), parsed, nil
+	keyURL := *parsed
+	keyURL.User = nil
+	key := keyURL.String()
+	if parsed.User != nil {
+		digest := sha256.Sum256([]byte(parsed.User.String()))
+		key += "#auth=" + hex.EncodeToString(digest[:8])
+	}
+	return key, parsed, nil
 }
 
 // defaultPoolSettings 获取默认连接池配置

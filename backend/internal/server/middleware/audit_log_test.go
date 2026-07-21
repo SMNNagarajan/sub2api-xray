@@ -145,3 +145,30 @@ func TestPromptAuditMutationAuditRoutesHaveStableActionsAndOmitBodies(t *testing
 		require.Truef(t, omitted, "%s must not persist its credential or confirmation-bearing body", route)
 	}
 }
+
+func TestCredentialBearingResourceRoutesOmitAuditBodies(t *testing.T) {
+	expected := []string{
+		"POST /api/v1/admin/accounts",
+		"PUT /api/v1/admin/accounts/:id",
+		"POST /api/v1/admin/accounts/data",
+		"POST /api/v1/admin/accounts/batch-update-credentials",
+		"POST /api/v1/admin/proxies",
+		"PUT /api/v1/admin/proxies/:id",
+		"POST /api/v1/admin/proxies/data",
+		"POST /api/v1/my/accounts",
+		"PUT /api/v1/my/accounts/:id",
+		"POST /api/v1/my/accounts/import",
+		"POST /api/v1/my/accounts/import/codex-session",
+		"POST /api/v1/my/accounts/import/codex-pat",
+		"POST /api/v1/my/proxies",
+		"PUT /api/v1/my/proxies/:id",
+		"POST /api/v1/my/proxies/import",
+		"POST /api/v1/my/proxies/sources",
+		"PUT /api/v1/my/proxies/sources/:id",
+	}
+	for _, route := range expected {
+		if _, omitted := auditBodyOmittedRoutes[route]; !omitted {
+			t.Fatalf("%s must not persist credential-bearing request bodies", route)
+		}
+	}
+}

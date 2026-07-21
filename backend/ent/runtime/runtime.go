@@ -2436,7 +2436,7 @@ func init() {
 	// usersubscription.SourceTypeValidator is a validator for the "source_type" field. It is called by the builders before save.
 	usersubscription.SourceTypeValidator = usersubscriptionDescSourceType.Validators[0].(func(string) error)
 	// usersubscriptionDescAssignedAt is the schema descriptor for assigned_at field.
-	usersubscriptionDescAssignedAt := usersubscriptionFields[15].Descriptor()
+	usersubscriptionDescAssignedAt := usersubscriptionFields[16].Descriptor()
 	// usersubscription.DefaultAssignedAt holds the default value on creation for the assigned_at field.
 	usersubscription.DefaultAssignedAt = usersubscriptionDescAssignedAt.Default.(func() time.Time)
 }

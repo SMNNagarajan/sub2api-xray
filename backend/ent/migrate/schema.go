@@ -2072,6 +2072,7 @@ var (
 		{Name: "group_id", Type: field.TypeInt64},
 		{Name: "user_id", Type: field.TypeInt64},
 		{Name: "assigned_by", Type: field.TypeInt64, Nullable: true},
+		{Name: "revoked_by_user_id", Type: field.TypeInt64, Nullable: true},
 	}
 	// UserSubscriptionsTable holds the schema information for the "user_subscriptions" table.
 	UserSubscriptionsTable = &schema.Table{
@@ -2094,6 +2095,12 @@ var (
 			{
 				Symbol:     "user_subscriptions_users_assigned_subscriptions",
 				Columns:    []*schema.Column{UserSubscriptionsColumns[20]},
+				RefColumns: []*schema.Column{UsersColumns[0]},
+				OnDelete:   schema.SetNull,
+			},
+			{
+				Symbol:     "user_subscriptions_revoked_by_user_id_fkey",
+				Columns:    []*schema.Column{UserSubscriptionsColumns[21]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -2145,9 +2152,17 @@ var (
 				Columns: []*schema.Column{UserSubscriptionsColumns[15]},
 			},
 			{
-				Name:    "usersubscription_user_id_group_id",
+				Name:    "usersubscription_revoked_by_user_id",
 				Unique:  false,
+				Columns: []*schema.Column{UserSubscriptionsColumns[21]},
+			},
+			{
+				Name:    "user_subscriptions_user_group_unique_active",
+				Unique:  true,
 				Columns: []*schema.Column{UserSubscriptionsColumns[19], UserSubscriptionsColumns[18]},
+				Annotation: &entsql.IndexAnnotation{
+					Where: "deleted_at IS NULL",
+				},
 			},
 			{
 				Name:    "usersubscription_deleted_at",
@@ -2356,6 +2371,7 @@ func init() {
 	UserSubscriptionsTable.ForeignKeys[0].RefTable = GroupsTable
 	UserSubscriptionsTable.ForeignKeys[1].RefTable = UsersTable
 	UserSubscriptionsTable.ForeignKeys[2].RefTable = UsersTable
+	UserSubscriptionsTable.ForeignKeys[3].RefTable = UsersTable
 	UserSubscriptionsTable.Annotation = &entsql.Annotation{
 		Table: "user_subscriptions",
 	}

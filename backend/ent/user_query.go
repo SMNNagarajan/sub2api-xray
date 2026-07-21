@@ -42,6 +42,7 @@ type UserQuery struct {
 	withRedeemCodes           *RedeemCodeQuery
 	withSubscriptions         *UserSubscriptionQuery
 	withAssignedSubscriptions *UserSubscriptionQuery
+	withRevokedSubscriptions  *UserSubscriptionQuery
 	withAnnouncementReads     *AnnouncementReadQuery
 	withAllowedGroups         *GroupQuery
 	withUsageLogs             *UsageLogQuery
@@ -171,6 +172,28 @@ func (_q *UserQuery) QueryAssignedSubscriptions() *UserSubscriptionQuery {
 			sqlgraph.From(user.Table, user.FieldID, selector),
 			sqlgraph.To(usersubscription.Table, usersubscription.FieldID),
 			sqlgraph.Edge(sqlgraph.O2M, false, user.AssignedSubscriptionsTable, user.AssignedSubscriptionsColumn),
+		)
+		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
+		return fromU, nil
+	}
+	return query
+}
+
+// QueryRevokedSubscriptions chains the current query on the "revoked_subscriptions" edge.
+func (_q *UserQuery) QueryRevokedSubscriptions() *UserSubscriptionQuery {
+	query := (&UserSubscriptionClient{config: _q.config}).Query()
+	query.path = func(ctx context.Context) (fromU *sql.Selector, err error) {
+		if err := _q.prepareQuery(ctx); err != nil {
+			return nil, err
+		}
+		selector := _q.sqlQuery(ctx)
+		if err := selector.Err(); err != nil {
+			return nil, err
+		}
+		step := sqlgraph.NewStep(
+			sqlgraph.From(user.Table, user.FieldID, selector),
+			sqlgraph.To(usersubscription.Table, usersubscription.FieldID),
+			sqlgraph.Edge(sqlgraph.O2M, false, user.RevokedSubscriptionsTable, user.RevokedSubscriptionsColumn),
 		)
 		fromU = sqlgraph.SetNeighbors(_q.driver.Dialect(), step)
 		return fromU, nil
@@ -616,6 +639,7 @@ func (_q *UserQuery) Clone() *UserQuery {
 		withRedeemCodes:           _q.withRedeemCodes.Clone(),
 		withSubscriptions:         _q.withSubscriptions.Clone(),
 		withAssignedSubscriptions: _q.withAssignedSubscriptions.Clone(),
+		withRevokedSubscriptions:  _q.withRevokedSubscriptions.Clone(),
 		withAnnouncementReads:     _q.withAnnouncementReads.Clone(),
 		withAllowedGroups:         _q.withAllowedGroups.Clone(),
 		withUsageLogs:             _q.withUsageLogs.Clone(),
@@ -674,6 +698,17 @@ func (_q *UserQuery) WithAssignedSubscriptions(opts ...func(*UserSubscriptionQue
 		opt(query)
 	}
 	_q.withAssignedSubscriptions = query
+	return _q
+}
+
+// WithRevokedSubscriptions tells the query-builder to eager-load the nodes that are connected to
+// the "revoked_subscriptions" edge. The optional arguments are used to configure the query builder of the edge.
+func (_q *UserQuery) WithRevokedSubscriptions(opts ...func(*UserSubscriptionQuery)) *UserQuery {
+	query := (&UserSubscriptionClient{config: _q.config}).Query()
+	for _, opt := range opts {
+		opt(query)
+	}
+	_q.withRevokedSubscriptions = query
 	return _q
 }
 
@@ -876,11 +911,12 @@ func (_q *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 	var (
 		nodes       = []*User{}
 		_spec       = _q.querySpec()
-		loadedTypes = [15]bool{
+		loadedTypes = [16]bool{
 			_q.withAPIKeys != nil,
 			_q.withRedeemCodes != nil,
 			_q.withSubscriptions != nil,
 			_q.withAssignedSubscriptions != nil,
+			_q.withRevokedSubscriptions != nil,
 			_q.withAnnouncementReads != nil,
 			_q.withAllowedGroups != nil,
 			_q.withUsageLogs != nil,
@@ -941,6 +977,15 @@ func (_q *UserQuery) sqlAll(ctx context.Context, hooks ...queryHook) ([]*User, e
 			func(n *User) { n.Edges.AssignedSubscriptions = []*UserSubscription{} },
 			func(n *User, e *UserSubscription) {
 				n.Edges.AssignedSubscriptions = append(n.Edges.AssignedSubscriptions, e)
+			}); err != nil {
+			return nil, err
+		}
+	}
+	if query := _q.withRevokedSubscriptions; query != nil {
+		if err := _q.loadRevokedSubscriptions(ctx, query, nodes,
+			func(n *User) { n.Edges.RevokedSubscriptions = []*UserSubscription{} },
+			func(n *User, e *UserSubscription) {
+				n.Edges.RevokedSubscriptions = append(n.Edges.RevokedSubscriptions, e)
 			}); err != nil {
 			return nil, err
 		}
@@ -1148,6 +1193,39 @@ func (_q *UserQuery) loadAssignedSubscriptions(ctx context.Context, query *UserS
 		node, ok := nodeids[*fk]
 		if !ok {
 			return fmt.Errorf(`unexpected referenced foreign-key "assigned_by" returned %v for node %v`, *fk, n.ID)
+		}
+		assign(node, n)
+	}
+	return nil
+}
+func (_q *UserQuery) loadRevokedSubscriptions(ctx context.Context, query *UserSubscriptionQuery, nodes []*User, init func(*User), assign func(*User, *UserSubscription)) error {
+	fks := make([]driver.Value, 0, len(nodes))
+	nodeids := make(map[int64]*User)
+	for i := range nodes {
+		fks = append(fks, nodes[i].ID)
+		nodeids[nodes[i].ID] = nodes[i]
+		if init != nil {
+			init(nodes[i])
+		}
+	}
+	if len(query.ctx.Fields) > 0 {
+		query.ctx.AppendFieldOnce(usersubscription.FieldRevokedByUserID)
+	}
+	query.Where(predicate.UserSubscription(func(s *sql.Selector) {
+		s.Where(sql.InValues(s.C(user.RevokedSubscriptionsColumn), fks...))
+	}))
+	neighbors, err := query.All(ctx)
+	if err != nil {
+		return err
+	}
+	for _, n := range neighbors {
+		fk := n.RevokedByUserID
+		if fk == nil {
+			return fmt.Errorf(`foreign-key "revoked_by_user_id" is nil for node %v`, n.ID)
+		}
+		node, ok := nodeids[*fk]
+		if !ok {
+			return fmt.Errorf(`unexpected referenced foreign-key "revoked_by_user_id" returned %v for node %v`, *fk, n.ID)
 		}
 		assign(node, n)
 	}

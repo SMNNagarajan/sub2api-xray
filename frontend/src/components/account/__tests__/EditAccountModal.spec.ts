@@ -2,10 +2,17 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
 import { mount } from '@vue/test-utils'
 
-const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
+const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode, userApiPutMock } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn(),
-  authIsSimpleMode: { value: true }
+  authIsSimpleMode: { value: true },
+  userApiPutMock: vi.fn()
+}))
+
+vi.mock('@/api/client', () => ({
+  apiClient: {
+    put: userApiPutMock,
+  },
 }))
 
 vi.mock('@/stores/app', () => ({
@@ -290,13 +297,14 @@ function buildOpenAISetupTokenAccount() {
   } as any
 }
 
-function mountModal(account = buildAccount()) {
+function mountModal(account = buildAccount(), scope: 'admin' | 'user' = 'admin') {
   return mount(EditAccountModal, {
     props: {
       show: true,
       account,
       proxies: [],
-      groups: []
+      groups: [],
+      scope
     },
     global: {
       stubs: {
@@ -314,6 +322,21 @@ function mountModal(account = buildAccount()) {
 describe('EditAccountModal', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
+    userApiPutMock.mockReset().mockResolvedValue({ data: buildAccount() })
+  })
+
+  it('preserves the disabled status when a user-scoped account is edited', async () => {
+    const account = { ...buildAccount(), status: 'disabled' } as any
+    const wrapper = mountModal(account, 'user')
+
+    expect(wrapper.get('[data-testid="account-status"]').element.value).toBe('disabled')
+    await wrapper.get('form#edit-account-form').trigger('submit.prevent')
+
+    expect(userApiPutMock).toHaveBeenCalledWith(
+      '/my/accounts/1',
+      expect.objectContaining({ status: 'disabled' }),
+    )
+    expect(updateAccountMock).not.toHaveBeenCalled()
   })
 
   it('reopening the same account rehydrates the OpenAI whitelist from props', async () => {

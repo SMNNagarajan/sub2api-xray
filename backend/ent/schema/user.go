@@ -124,6 +124,8 @@ func (User) Edges() []ent.Edge {
 		edge.To("redeem_codes", RedeemCode.Type),
 		edge.To("subscriptions", UserSubscription.Type),
 		edge.To("assigned_subscriptions", UserSubscription.Type),
+		edge.To("revoked_subscriptions", UserSubscription.Type).
+			StorageKey(edge.Symbol("user_subscriptions_revoked_by_user_id_fkey")),
 		edge.To("announcement_reads", AnnouncementRead.Type),
 		edge.To("allowed_groups", Group.Type).
 			Through("user_allowed_groups", UserAllowedGroup.Type),

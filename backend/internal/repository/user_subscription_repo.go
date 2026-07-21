@@ -41,7 +41,8 @@ func (r *userSubscriptionRepository) Create(ctx context.Context, sub *service.Us
 		SetNillableAssignedBy(sub.AssignedBy).
 		SetNillableManagedByUserID(sub.ManagedByUserID).
 		SetSourceType(sub.SourceType).
-		SetNillableSourceRedeemCodeID(sub.SourceRedeemCodeID)
+		SetNillableSourceRedeemCodeID(sub.SourceRedeemCodeID).
+		SetNillableRevokedByUserID(sub.RevokedByUserID)
 
 	if sub.StartsAt.IsZero() {
 		builder.SetStartsAt(time.Now())
@@ -144,6 +145,7 @@ func (r *userSubscriptionRepository) Update(ctx context.Context, sub *service.Us
 		SetNillableManagedByUserID(sub.ManagedByUserID).
 		SetSourceType(sub.SourceType).
 		SetNillableSourceRedeemCodeID(sub.SourceRedeemCodeID).
+		SetNillableRevokedByUserID(sub.RevokedByUserID).
 		SetAssignedAt(sub.AssignedAt).
 		SetNotes(sub.Notes)
 
@@ -167,6 +169,7 @@ func (r *userSubscriptionRepository) Restore(ctx context.Context, subscriptionID
 	queryCtx := mixins.SkipSoftDelete(ctx)
 	_, err := client.UserSubscription.UpdateOneID(subscriptionID).
 		SetStatus(restoredStatus).
+		ClearRevokedByUserID().
 		ClearDeletedAt().
 		SetUpdatedAt(time.Now()).
 		Save(queryCtx)
@@ -645,6 +648,7 @@ func userSubscriptionEntityToServiceWithStatusMapping(m *dbent.UserSubscription,
 		ManagedByUserID:    m.ManagedByUserID,
 		SourceType:         m.SourceType,
 		SourceRedeemCodeID: m.SourceRedeemCodeID,
+		RevokedByUserID:    m.RevokedByUserID,
 		AssignedAt:         m.AssignedAt,
 		Notes:              derefString(m.Notes),
 		CreatedAt:          m.CreatedAt,

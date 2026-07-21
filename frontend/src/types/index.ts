@@ -965,7 +965,7 @@ export interface Account {
   scheduler_scores?: AccountSchedulerGroupScore[] | null
   priority: number
   rate_multiplier?: number // Account billing multiplier (>=0, 0 means free)
-  status: 'active' | 'inactive' | 'error'
+  status: 'active' | 'inactive' | 'disabled' | 'error'
   error_message: string | null
   last_used_at: string | null
   expires_at: number | null
@@ -1144,6 +1144,7 @@ export interface AccountUsageInfo {
   grok_last_quota_probe_at?: string
   grok_last_headers_seen_at?: string
   grok_last_status_code?: number
+  grok_free_token_limit?: number | null
   grok_local_usage?: WindowStats | null
   grok_local_usage_24h?: WindowStats | null
   grok_local_usage_7d?: WindowStats | null

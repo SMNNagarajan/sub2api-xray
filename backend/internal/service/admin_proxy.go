@@ -212,11 +212,8 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	proxy.BackupProxyID = input.BackupProxyID
 	proxy.ExpiryWarnDays = input.ExpiryWarnDays
 
-	if err := DefaultXrayRuntimeManager().Stop(id); err != nil {
-		return nil, fmt.Errorf("stop previous xray runtime: %w", err)
-	}
-	if err := DefaultSingBoxRuntimeManager().Stop(id); err != nil {
-		return nil, fmt.Errorf("stop previous sing-box runtime: %w", err)
+	if err := stopProxyRuntimesWithRetry(id); err != nil {
+		return nil, fmt.Errorf("stop previous proxy runtime: %w", err)
 	}
 	if err := s.proxyRepo.Update(ctx, proxy); err != nil {
 		return nil, err
@@ -300,10 +297,14 @@ func (s *adminServiceImpl) DeleteProxy(ctx context.Context, id int64) error {
 	if count > 0 {
 		return ErrProxyInUse
 	}
-	if err := DefaultXrayRuntimeManager().Stop(id); err != nil {
+	fallbackCount, err := s.proxyRepo.CountFallbackReferencesByProxyID(ctx, id)
+	if err != nil {
 		return err
 	}
-	if err := DefaultSingBoxRuntimeManager().Stop(id); err != nil {
+	if fallbackCount > 0 {
+		return ErrProxyInUse
+	}
+	if err := stopProxyRuntimesWithRetry(id); err != nil {
 		return err
 	}
 	return s.proxyRepo.Delete(ctx, id)
@@ -331,14 +332,16 @@ func (s *adminServiceImpl) BatchDeleteProxies(ctx context.Context, ids []int64) 
 			})
 			continue
 		}
-		if err := DefaultXrayRuntimeManager().Stop(id); err != nil {
-			result.Skipped = append(result.Skipped, ProxyBatchDeleteSkipped{
-				ID:     id,
-				Reason: err.Error(),
-			})
+		fallbackCount, err := s.proxyRepo.CountFallbackReferencesByProxyID(ctx, id)
+		if err != nil {
+			result.Skipped = append(result.Skipped, ProxyBatchDeleteSkipped{ID: id, Reason: err.Error()})
 			continue
 		}
-		if err := DefaultSingBoxRuntimeManager().Stop(id); err != nil {
+		if fallbackCount > 0 {
+			result.Skipped = append(result.Skipped, ProxyBatchDeleteSkipped{ID: id, Reason: ErrProxyInUse.Error()})
+			continue
+		}
+		if err := stopProxyRuntimesWithRetry(id); err != nil {
 			result.Skipped = append(result.Skipped, ProxyBatchDeleteSkipped{
 				ID:     id,
 				Reason: err.Error(),

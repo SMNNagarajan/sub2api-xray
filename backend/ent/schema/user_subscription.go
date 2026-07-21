@@ -83,6 +83,10 @@ func (UserSubscription) Fields() []ent.Field {
 		field.Int64("source_redeem_code_id").
 			Optional().
 			Nillable(),
+		field.Int64("revoked_by_user_id").
+			Optional().
+			Nillable().
+			Comment("User who most recently revoked this subscription."),
 		field.Time("assigned_at").
 			Default(time.Now).
 			SchemaType(map[string]string{dialect.Postgres: "timestamptz"}),
@@ -109,6 +113,11 @@ func (UserSubscription) Edges() []ent.Edge {
 			Ref("assigned_subscriptions").
 			Field("assigned_by").
 			Unique(),
+		edge.From("revoked_by_user", User.Type).
+			Ref("revoked_subscriptions").
+			Field("revoked_by_user_id").
+			Unique().
+			Annotations(entsql.OnDelete(entsql.SetNull)),
 		edge.To("usage_logs", UsageLog.Type),
 	}
 }
@@ -125,9 +134,13 @@ func (UserSubscription) Indexes() []ent.Index {
 		index.Fields("managed_by_user_id"),
 		index.Fields("source_type"),
 		index.Fields("source_redeem_code_id"),
+		index.Fields("revoked_by_user_id"),
 		// 唯一约束通过部分索引实现（WHERE deleted_at IS NULL），支持软删除后重新订阅
 		// 见迁移文件 016_soft_delete_partial_unique_indexes.sql
-		index.Fields("user_id", "group_id"),
+		index.Fields("user_id", "group_id").
+			Unique().
+			StorageKey("user_subscriptions_user_group_unique_active").
+			Annotations(entsql.IndexWhere("deleted_at IS NULL")),
 		index.Fields("deleted_at"),
 	}
 }

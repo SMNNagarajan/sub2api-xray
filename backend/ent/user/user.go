@@ -71,6 +71,8 @@ const (
 	EdgeSubscriptions = "subscriptions"
 	// EdgeAssignedSubscriptions holds the string denoting the assigned_subscriptions edge name in mutations.
 	EdgeAssignedSubscriptions = "assigned_subscriptions"
+	// EdgeRevokedSubscriptions holds the string denoting the revoked_subscriptions edge name in mutations.
+	EdgeRevokedSubscriptions = "revoked_subscriptions"
 	// EdgeAnnouncementReads holds the string denoting the announcement_reads edge name in mutations.
 	EdgeAnnouncementReads = "announcement_reads"
 	// EdgeAllowedGroups holds the string denoting the allowed_groups edge name in mutations.
@@ -123,6 +125,13 @@ const (
 	AssignedSubscriptionsInverseTable = "user_subscriptions"
 	// AssignedSubscriptionsColumn is the table column denoting the assigned_subscriptions relation/edge.
 	AssignedSubscriptionsColumn = "assigned_by"
+	// RevokedSubscriptionsTable is the table that holds the revoked_subscriptions relation/edge.
+	RevokedSubscriptionsTable = "user_subscriptions"
+	// RevokedSubscriptionsInverseTable is the table name for the UserSubscription entity.
+	// It exists in this package in order to avoid circular dependency with the "usersubscription" package.
+	RevokedSubscriptionsInverseTable = "user_subscriptions"
+	// RevokedSubscriptionsColumn is the table column denoting the revoked_subscriptions relation/edge.
+	RevokedSubscriptionsColumn = "revoked_by_user_id"
 	// AnnouncementReadsTable is the table that holds the announcement_reads relation/edge.
 	AnnouncementReadsTable = "announcement_reads"
 	// AnnouncementReadsInverseTable is the table name for the AnnouncementRead entity.
@@ -485,6 +494,20 @@ func ByAssignedSubscriptions(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOp
 	}
 }
 
+// ByRevokedSubscriptionsCount orders the results by revoked_subscriptions count.
+func ByRevokedSubscriptionsCount(opts ...sql.OrderTermOption) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborsCount(s, newRevokedSubscriptionsStep(), opts...)
+	}
+}
+
+// ByRevokedSubscriptions orders the results by revoked_subscriptions terms.
+func ByRevokedSubscriptions(term sql.OrderTerm, terms ...sql.OrderTerm) OrderOption {
+	return func(s *sql.Selector) {
+		sqlgraph.OrderByNeighborTerms(s, newRevokedSubscriptionsStep(), append([]sql.OrderTerm{term}, terms...)...)
+	}
+}
+
 // ByAnnouncementReadsCount orders the results by announcement_reads count.
 func ByAnnouncementReadsCount(opts ...sql.OrderTermOption) OrderOption {
 	return func(s *sql.Selector) {
@@ -664,6 +687,13 @@ func newAssignedSubscriptionsStep() *sqlgraph.Step {
 		sqlgraph.From(Table, FieldID),
 		sqlgraph.To(AssignedSubscriptionsInverseTable, FieldID),
 		sqlgraph.Edge(sqlgraph.O2M, false, AssignedSubscriptionsTable, AssignedSubscriptionsColumn),
+	)
+}
+func newRevokedSubscriptionsStep() *sqlgraph.Step {
+	return sqlgraph.NewStep(
+		sqlgraph.From(Table, FieldID),
+		sqlgraph.To(RevokedSubscriptionsInverseTable, FieldID),
+		sqlgraph.Edge(sqlgraph.O2M, false, RevokedSubscriptionsTable, RevokedSubscriptionsColumn),
 	)
 }
 func newAnnouncementReadsStep() *sqlgraph.Step {

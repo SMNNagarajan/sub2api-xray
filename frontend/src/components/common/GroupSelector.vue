@@ -71,6 +71,8 @@ interface Props {
   platform?: GroupPlatform // Optional platform filter
   mixedScheduling?: boolean // For antigravity accounts: allow anthropic/gemini groups
   searchable?: boolean | 'auto'
+  ownerUserId?: number | null
+  enforceOwner?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -90,6 +92,9 @@ const isSearchable = computed(() => {
 // Filter groups by platform if specified
 const filteredGroups = computed(() => {
   let result: AdminGroup[] = props.groups
+  if (props.enforceOwner) {
+    result = result.filter((group) => group.owner_user_id === (props.ownerUserId ?? null))
+  }
   if (props.platform) {
     // antigravity 账户启用混合调度后，可选择 anthropic/gemini 分组
     if (props.platform === 'antigravity' && props.mixedScheduling) {

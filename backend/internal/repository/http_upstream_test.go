@@ -763,6 +763,21 @@ func (s *HTTPUpstreamSuite) TestNormalizeProxyURL_Canonicalizes() {
 	require.Equal(s.T(), key1, key2, "expected normalized proxy keys to match")
 }
 
+func (s *HTTPUpstreamSuite) TestNormalizeProxyURL_HashesCredentialsInCacheKey() {
+	key1, parsed1, err := normalizeProxyURL("http://alice:first-secret@proxy.local:8080")
+	require.NoError(s.T(), err)
+	key2, _, err := normalizeProxyURL("http://alice:second-secret@proxy.local:8080")
+	require.NoError(s.T(), err)
+
+	require.NotEqual(s.T(), key1, key2, "different proxy credentials must not share a client")
+	require.NotContains(s.T(), key1, "alice")
+	require.NotContains(s.T(), key1, "first-secret")
+	require.Contains(s.T(), key1, "#auth=")
+	password, ok := parsed1.User.Password()
+	require.True(s.T(), ok)
+	require.Equal(s.T(), "first-secret", password)
+}
+
 // TestAcquireClient_OverLimitReturnsError 测试连接池缓存上限保护
 // 验证超限且无可淘汰条目时返回错误
 func (s *HTTPUpstreamSuite) TestAcquireClient_OverLimitReturnsError() {

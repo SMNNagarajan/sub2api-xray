@@ -213,3 +213,23 @@ func TestParse_无Scheme裸地址(t *testing.T) {
 		t.Fatal("无 scheme 的裸地址应返回错误")
 	}
 }
+
+func TestSafeForLogRemovesAllCredentialMaterial(t *testing.T) {
+	raw := "http://visible-user:super-secret@Proxy.Example.com:8080/private?token=hidden#fragment"
+	got := SafeForLog(raw)
+	if got != "http://proxy.example.com:8080" {
+		t.Fatalf("unexpected log-safe proxy endpoint: %q", got)
+	}
+	for _, secret := range []string{"visible-user", "super-secret", "private", "token", "hidden", "fragment"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("log-safe proxy endpoint leaked %q: %q", secret, got)
+		}
+	}
+}
+
+func TestSafeForLogInvalidURLDoesNotEchoInput(t *testing.T) {
+	got := SafeForLog("http://user:secret%zz@example.com")
+	if got != "<invalid-proxy>" || strings.Contains(got, "secret") {
+		t.Fatalf("invalid proxy URL leaked input: %q", got)
+	}
+}

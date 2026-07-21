@@ -97,6 +97,9 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		if err != nil {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 		}
+		if resp == nil {
+			return nil, fmt.Errorf("xAI upstream returned an empty response")
+		}
 
 		// xAI can reject encrypted reasoning copied from a response produced under
 		// another account or cache identity. Retry once with the same routing and
@@ -108,7 +111,12 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		if resp.Body != nil {
 			_ = resp.Body.Close()
 		}
-		if !isGrokInvalidEncryptedContentResponse(resp.StatusCode, respBody) {
+		// Some xAI relays return only an opaque 400. Retry those only when the
+		// outbound body actually contains encrypted reasoning; structured errors
+		// with another code or message must keep their original behavior.
+		shouldRetryInvalidEncryptedContent := isGrokInvalidEncryptedContentResponse(resp.StatusCode, respBody) ||
+			(isGrokOpaqueBadRequest(resp.StatusCode, respBody) && requestHasGrokEncryptedReasoning(patchedBody))
+		if !shouldRetryInvalidEncryptedContent {
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
 			break
 		}
@@ -125,7 +133,9 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		patchedBody = retryBody
 		slog.Info("grok_invalid_encrypted_content_retry", "account_id", account.ID, "cache_identity_present", cacheIdentity != "")
 	}
-	defer func() { _ = resp.Body.Close() }()
+	if resp.Body != nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 
 	if resp.StatusCode >= 400 {
 		respBody := s.readUpstreamErrorBody(resp)
@@ -202,14 +212,119 @@ func isGrokInvalidEncryptedContentResponse(statusCode int, body []byte) bool {
 	}
 
 	code := gjson.GetBytes(body, "code")
+	if code.Type != gjson.String {
+		return false
+	}
 	message := gjson.GetBytes(body, "error")
-	if code.Type != gjson.String || message.Type != gjson.String ||
-		!strings.EqualFold(strings.TrimSpace(code.String()), "invalid-argument") {
+	if message.Type != gjson.String {
+		message = gjson.GetBytes(body, "error.message")
+	}
+	if message.Type != gjson.String {
 		return false
 	}
 
-	normalizedMessage := strings.ToLower(message.String())
-	return strings.Contains(normalizedMessage, "decrypt") && strings.Contains(normalizedMessage, "encrypted_content")
+	normalizedCode := strings.TrimSpace(code.String())
+	normalizedMessage := strings.ToLower(strings.TrimSpace(message.String()))
+	if strings.EqualFold(normalizedCode, "invalid_encrypted_content") {
+		return strings.Contains(normalizedMessage, "encrypted")
+	}
+	if !strings.EqualFold(normalizedCode, "invalid-argument") {
+		return false
+	}
+	return strings.Contains(normalizedMessage, "encrypted_content") &&
+		(strings.Contains(normalizedMessage, "decrypt") || strings.Contains(normalizedMessage, "unmodified"))
+}
+
+func isGrokOpaqueBadRequest(statusCode int, body []byte) bool {
+	if statusCode != http.StatusBadRequest {
+		return false
+	}
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return true
+	}
+	if !json.Valid(trimmed) {
+		message := strings.ToLower(strings.TrimSpace(string(trimmed)))
+		return message == "bad request" || message == "400 bad request"
+	}
+	return !gjson.GetBytes(trimmed, "code").Exists() &&
+		!gjson.GetBytes(trimmed, "error").Exists() &&
+		!gjson.GetBytes(trimmed, "message").Exists()
+}
+
+func requestHasGrokEncryptedReasoning(body []byte) bool {
+	input := gjson.GetBytes(body, "input")
+	if !input.Exists() {
+		return false
+	}
+	items := input.Array()
+	if input.IsObject() {
+		items = []gjson.Result{input}
+	}
+	for _, item := range items {
+		if strings.TrimSpace(item.Get("type").String()) != "reasoning" {
+			continue
+		}
+		value := item.Get("encrypted_content")
+		if value.Exists() && value.Type != gjson.Null && strings.TrimSpace(value.String()) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+type grokEncryptedContentStripRetriedKey struct{}
+
+func markGrokEncryptedContentStripRetried(ctx context.Context) context.Context {
+	return context.WithValue(ctx, grokEncryptedContentStripRetriedKey{}, true)
+}
+
+func grokEncryptedContentStripRetried(ctx context.Context) bool {
+	value, _ := ctx.Value(grokEncryptedContentStripRetriedKey{}).(bool)
+	return value
+}
+
+func stripAnthropicThinkingSignatures(body []byte) ([]byte, bool) {
+	if len(body) == 0 || !bytes.Contains(body, []byte(`"signature"`)) {
+		return body, false
+	}
+	var request map[string]any
+	if err := json.Unmarshal(body, &request); err != nil {
+		return body, false
+	}
+	messages, ok := request["messages"].([]any)
+	if !ok {
+		return body, false
+	}
+	changed := false
+	for _, rawMessage := range messages {
+		message, ok := rawMessage.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, ok := message["content"].([]any)
+		if !ok {
+			continue
+		}
+		for _, rawBlock := range content {
+			block, ok := rawBlock.(map[string]any)
+			if !ok || block["type"] != "thinking" {
+				continue
+			}
+			if _, exists := block["signature"]; exists {
+				delete(block, "signature")
+				changed = true
+			}
+		}
+	}
+	if !changed {
+		return body, false
+	}
+	out, err := json.Marshal(request)
+	if err != nil {
+		return body, false
+	}
+	return out, true
 }
 
 func trimGrokInvalidEncryptedContentRetryBody(body []byte) ([]byte, bool, error) {

@@ -23,9 +23,9 @@ describe('CreateAccountModal Grok account types', () => {
     expect(source).toContain('form.platform === \'grok\' && isOAuthFlow')
   })
 
-  it('validates and applies upstream config on all three Grok OAuth create paths', () => {
-    // 授权码兑换 / RT 批量 / SSO 批量 3 处调用（定义为箭头函数，不计入）
-    expect(source.match(/validateGrokOAuthUpstreamConfig\(\)/g)?.length).toBe(3)
-    expect(source.match(/applyGrokOAuthUpstreamConfig\(credentials\)/g)?.length).toBe(3)
+  it('validates and applies upstream config on every Grok OAuth create path', () => {
+    // Admin/user authorization-code exchange, RT batch, and SSO batch paths.
+    expect(source.match(/validateGrokOAuthUpstreamConfig\(\)/g)?.length).toBe(4)
+    expect(source.match(/applyGrokOAuthUpstreamConfig\(credentials\)/g)?.length).toBe(4)
   })
 })

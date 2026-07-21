@@ -13,6 +13,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/lib/pq"
 )
 
 func TestRedactPublicProxyHidesCredentialsAndXraySecrets(t *testing.T) {
@@ -29,6 +30,7 @@ func TestRedactPublicProxyHidesCredentialsAndXraySecrets(t *testing.T) {
 		"password":        "proxy-pass",
 		"extra": map[string]any{
 			"raw":           "vless://uuid@example.com:443?pbk=secret",
+			"alt":           "hy2://secret@example.com:443",
 			"xray_outbound": map[string]any{"settings": "secret"},
 			"share_link":    "trojan://secret@example.com:443",
 			"transport": map[string]any{
@@ -41,34 +43,38 @@ func TestRedactPublicProxyHidesCredentialsAndXraySecrets(t *testing.T) {
 
 	redactPublicProxy(item, 99)
 
-	if item["username"] != "" || item["password"] != "" {
-		t.Fatalf("public proxy credentials were not redacted: %#v", item)
-	}
-	if item["host"] != "" || item["port"] != nil || item["ip_address"] != "" || item["latency_message"] != "" || item["has_auth"] != nil {
-		t.Fatalf("public proxy endpoint details were not redacted: %#v", item)
-	}
-	if item["owner_user_id"] != nil || item["is_owned"] != false || item["details_hidden"] != true {
-		t.Fatalf("public proxy ownership metadata was not redacted: %#v", item)
-	}
-	extra, ok := item["extra"].(map[string]any)
-	if !ok {
-		t.Fatalf("extra should remain a map: %#v", item["extra"])
-	}
-	for _, key := range []string{"raw", "xray_outbound", "share_link"} {
-		if extra[key] != "" {
-			t.Fatalf("sensitive extra field %q was not redacted: %#v", key, extra)
+	for _, key := range []string{
+		"owner_user_id", "host", "port", "username", "password", "has_auth",
+		"backup_proxy_id", "ip_address", "latency_message", "extra",
+	} {
+		if _, exists := item[key]; exists {
+			t.Fatalf("public proxy private field %q was returned: %#v", key, item)
 		}
 	}
-	if extra["region"] != "us" {
-		t.Fatalf("non-sensitive extra field should be preserved: %#v", extra)
+	if item["is_owned"] != false || item["details_hidden"] != true {
+		t.Fatalf("public proxy ownership metadata was not redacted: %#v", item)
 	}
-	transport := extra["transport"].(map[string]any)
-	users := transport["users"].([]any)
-	if transport["password"] != "" || users[0].(map[string]any)["private_key"] != "" {
-		t.Fatalf("nested public proxy credentials were not redacted: %#v", extra)
+	for _, key := range []string{"id", "is_public", "kind", "name", "protocol", "status"} {
+		if _, exists := item[key]; !exists && key != "kind" && key != "name" && key != "protocol" && key != "status" {
+			t.Fatalf("public proxy metadata field %q is missing: %#v", key, item)
+		}
 	}
-	if extra["redacted"] != true {
-		t.Fatalf("redacted marker missing: %#v", extra)
+}
+
+func TestRedactProxyExtraValueCoversModernShareSchemes(t *testing.T) {
+	for _, value := range []string{
+		"hysteria://secret@example.com:443",
+		"hysteria2://secret@example.com:443",
+		"hy2://secret@example.com:443",
+		"tuic://uuid:secret@example.com:443",
+		"anytls://secret@example.com:443",
+		"naive://user:secret@example.com:443",
+		"wireguard://private-key@example.com:51820",
+	} {
+		clean, redacted := redactProxyExtraValue(value)
+		if !redacted || clean != "" {
+			t.Fatalf("share URI was not redacted: %q -> %#v", value, clean)
+		}
 	}
 }
 
@@ -118,6 +124,71 @@ func TestRedactProxyForUserResponseHidesOwnedCredentials(t *testing.T) {
 	}
 	if extra["region"] != "us" {
 		t.Fatalf("non-sensitive proxy metadata was removed: %#v", extra)
+	}
+}
+
+func TestRedactProxyForUserResponsePreservesForeignPublicProxyShape(t *testing.T) {
+	item := map[string]any{
+		"id":             int64(10),
+		"name":           "public-proxy",
+		"protocol":       "http",
+		"status":         StatusActive,
+		"is_public":      true,
+		"is_owned":       false,
+		"details_hidden": true,
+	}
+
+	RedactProxyForUserResponse(item)
+
+	for _, key := range []string{"username", "password", "extra", "host", "port", "owner_user_id"} {
+		if _, exists := item[key]; exists {
+			t.Fatalf("foreign public proxy redaction added private field %q: %#v", key, item)
+		}
+	}
+	if item["details_hidden"] != true || item["is_owned"] != false {
+		t.Fatalf("foreign public proxy redaction changed visibility markers: %#v", item)
+	}
+}
+
+func TestTranslateUserResourceProxyConstraintError(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantReason string
+		wantSame   bool
+	}{
+		{
+			name:       "public proxy usage trigger",
+			err:        &pq.Error{Code: "23514", Message: "public proxy is still used by another user resource"},
+			wantReason: "PROXY_PUBLIC_IN_USE",
+		},
+		{
+			name:       "wrapped public proxy usage trigger",
+			err:        fmt.Errorf("update failed: %w", &pq.Error{Code: "23514", Message: "public proxy is still used by another user resource"}),
+			wantReason: "PROXY_PUBLIC_IN_USE",
+		},
+		{
+			name:     "different check constraint",
+			err:      &pq.Error{Code: "23514", Message: "account ownership check failed"},
+			wantSame: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := translateUserResourceProxyConstraintError(tt.err)
+			if tt.wantSame && got != tt.err {
+				t.Fatalf("different constraint was translated: got %#v, want original %#v", got, tt.err)
+			}
+			if tt.wantReason != "" {
+				if !infraerrors.IsConflict(got) || infraerrors.Reason(got) != tt.wantReason {
+					t.Fatalf("unexpected translated error: %#v", got)
+				}
+				if strings.Contains(infraerrors.Message(got), "23514") || strings.Contains(infraerrors.Message(got), "another user resource") {
+					t.Fatalf("translated error exposed database details: %#v", got)
+				}
+			}
+		})
 	}
 }
 
@@ -539,7 +610,7 @@ func TestUserOwnedAccountAndProxyRejectInternalOutboundTargets(t *testing.T) {
 	}
 }
 
-func TestPrivateUserGroupsRequireOwnershipOrSubscription(t *testing.T) {
+func TestPrivateStandardGroupsRequireOwnership(t *testing.T) {
 	ownerID := int64(10)
 	group := &Group{ID: 55, OwnerUserID: &ownerID, SubscriptionType: SubscriptionTypeStandard}
 	svc := &APIKeyService{}
@@ -549,8 +620,8 @@ func TestPrivateUserGroupsRequireOwnershipOrSubscription(t *testing.T) {
 	if svc.canUserBindGroupInternal(&User{ID: 20}, group, map[int64]bool{}) {
 		t.Fatal("foreign user should not bind a private standard group")
 	}
-	if !svc.canUserBindGroupInternal(&User{ID: 20}, group, map[int64]bool{group.ID: true}) {
-		t.Fatal("subscribed user should be able to bind the private group")
+	if svc.canUserBindGroupInternal(&User{ID: 20}, group, map[int64]bool{group.ID: true}) {
+		t.Fatal("a subscription must not make a private standard group shareable")
 	}
 }
 
@@ -588,18 +659,13 @@ func TestGetProxyLooksUpByIDAndRedactsAnotherUsersPublicProxy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetProxy returned error: %v", err)
 	}
-	if item["username"] != "" || item["password"] != "" {
-		t.Fatalf("public proxy credentials were not redacted: %#v", item)
+	for _, key := range []string{"username", "password", "host", "port", "owner_user_id", "extra"} {
+		if _, exists := item[key]; exists {
+			t.Fatalf("public proxy private field %q was returned: %#v", key, item)
+		}
 	}
-	if item["host"] != "" || item["port"] != nil || item["owner_user_id"] != nil || item["details_hidden"] != true {
+	if item["is_owned"] != false || item["details_hidden"] != true {
 		t.Fatalf("foreign public proxy endpoint was not hidden: %#v", item)
-	}
-	extra, ok := item["extra"].(map[string]any)
-	if !ok {
-		t.Fatalf("extra should decode as a map: %#v", item["extra"])
-	}
-	if extra["raw"] != "" || extra["region"] != "us" || extra["redacted"] != true {
-		t.Fatalf("public proxy extra was not redacted correctly: %#v", extra)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
@@ -646,8 +712,8 @@ func TestRedactUpstreamErrorsForUserScrubsSecretsAndForeignRequester(t *testing.
 		"user_id":                int64(77),
 		"api_key_id":             int64(88),
 		"user_agent":             "client access_token=secret-token",
-		"message":                `{"error":"bad","api_key":"sk-secret"}`,
-		"upstream_error_message": "Authorization: Bearer leaked-token",
+		"message":                `{"error":"bad prompt: private customer text","api_key":"sk-secret"}`,
+		"upstream_error_message": "customer@example.com Authorization: Bearer leaked-token",
 		"request_path":           "/v1/messages?api_key=sk-path-secret",
 		"client_request_id":      "req-secret",
 		"upstream_errors": []any{
@@ -664,15 +730,12 @@ func TestRedactUpstreamErrorsForUserScrubsSecretsAndForeignRequester(t *testing.
 	if item["user_id"] != nil || item["api_key_id"] != nil || item["user_agent"] != "" {
 		t.Fatalf("foreign requester fields were not hidden: %#v", item)
 	}
-	for _, key := range []string{"message", "upstream_error_message", "request_path"} {
-		if strings.Contains(urAsString(item[key]), "secret") || strings.Contains(urAsString(item[key]), "leaked-token") {
-			t.Fatalf("%s was not redacted: %#v", key, item[key])
-		}
+	if item["message"] != "upstream request failed" || item["upstream_error_message"] != "" || item["request_path"] != "" || item["client_request_id"] != "" {
+		t.Fatalf("foreign request details were not removed: %#v", item)
 	}
 	upstreamErrors := item["upstream_errors"].([]any)
-	nested := upstreamErrors[0].(map[string]any)
-	if nested["Authorization"] != "" || strings.Contains(urAsString(nested["message"]), "refresh-secret") {
-		t.Fatalf("nested upstream errors were not redacted: %#v", nested)
+	if len(upstreamErrors) != 0 {
+		t.Fatalf("foreign upstream error details were not removed: %#v", upstreamErrors)
 	}
 }
 
@@ -809,7 +872,7 @@ func TestListUpstreamErrorsRedactsMessagesAndForeignRequesterFields(t *testing.T
 		int64(33), int64(44), "owned-account", int64(55), "owned-group",
 		"anthropic", "claude", "claude", "claude", "upstream", "bad_request",
 		"provider", "gateway", "error", int64(502),
-		int64(401), "Authorization: Bearer leaked-token", `{"api_key":"sk-secret"}`,
+		int64(401), "customer@example.com Authorization: Bearer leaked-token", `{"error":"private prompt text","api_key":"sk-secret"}`,
 		"/v1/messages?api_key=sk-path-secret", false, "agent access_token=ua-secret",
 		`[{"message":"refresh_token=refresh-secret","Authorization":"Bearer nested-secret"}]`,
 	)
@@ -831,7 +894,7 @@ func TestListUpstreamErrorsRedactsMessagesAndForeignRequesterFields(t *testing.T
 	}
 	raw, _ := json.Marshal(item)
 	text := string(raw)
-	for _, secret := range []string{"leaked-token", "sk-secret", "sk-path-secret", "ua-secret", "refresh-secret", "nested-secret"} {
+	for _, secret := range []string{"customer@example.com", "private prompt text", "leaked-token", "sk-secret", "sk-path-secret", "ua-secret", "refresh-secret", "nested-secret"} {
 		if strings.Contains(text, secret) {
 			t.Fatalf("upstream error list leaked %q in %#v", secret, item)
 		}
@@ -1097,12 +1160,12 @@ func TestDeleteGroupUsesTransactionAndInvalidatesAffectedUsers(t *testing.T) {
 		WithArgs(int64(55)).
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectQuery(`(?s)UPDATE user_subscriptions.*RETURNING user_id`).
-		WithArgs(int64(55)).
+		WithArgs(int64(55), int64(10)).
 		WillReturnRows(sqlmock.NewRows([]string{"user_id"}).AddRow(int64(21)).AddRow(int64(21)).AddRow(int64(22)))
-	mock.ExpectCommit()
 	mock.ExpectExec(`INSERT INTO scheduler_outbox`).
 		WithArgs(SchedulerOutboxEventGroupChanged, nil, int64(55), nil).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	svc := NewUserResourceService(db, nil, nil, nil)
 	if err := svc.DeleteGroup(context.Background(), 10, 55); err != nil {
@@ -1158,9 +1221,10 @@ func TestCreateAccountRollsBackWhenGroupBindingFails(t *testing.T) {
 
 	svc := NewUserResourceService(db, nil, nil, nil)
 	_, err = svc.CreateAccount(context.Background(), 10, map[string]any{
-		"name":     "transactional-account",
-		"platform": PlatformOpenAI,
-		"type":     AccountTypeAPIKey,
+		"name":        "transactional-account",
+		"platform":    PlatformOpenAI,
+		"type":        AccountTypeAPIKey,
+		"credentials": map[string]any{"api_key": "sk-test"},
 	})
 	if err == nil {
 		t.Fatal("expected CreateAccount to return the binding error")
@@ -1192,6 +1256,195 @@ func TestDeleteAccountRollsBackWhenBindingCleanupFails(t *testing.T) {
 	svc := NewUserResourceService(db, nil, nil, nil)
 	if err := svc.DeleteAccount(context.Background(), 10, 55); err == nil {
 		t.Fatal("expected DeleteAccount to return the cleanup error")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestUnsubscribeOwnSubscriptionWritesRevocationAtomically(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)UPDATE user_subscriptions.*revoked_by_user_id.*RETURNING group_id`).
+		WithArgs(int64(55), int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{"group_id"}).AddRow(int64(77)))
+	mock.ExpectCommit()
+
+	svc := NewUserResourceService(db, nil, nil, nil)
+	if err := svc.UnsubscribeOwnSubscription(context.Background(), 10, 55); err != nil {
+		t.Fatalf("UnsubscribeOwnSubscription returned error: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestUnsubscribeOwnSubscriptionRollsBackWhenRevocationWriteFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)UPDATE user_subscriptions.*revoked_by_user_id.*RETURNING group_id`).
+		WithArgs(int64(55), int64(10)).
+		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
+
+	svc := NewUserResourceService(db, nil, nil, nil)
+	if err := svc.UnsubscribeOwnSubscription(context.Background(), 10, 55); err == nil {
+		t.Fatal("expected unsubscribe write to fail")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestDeleteGroupRollsBackWhenSchedulerOutboxFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE groups SET deleted_at`).
+		WithArgs(int64(55), int64(10)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM account_groups WHERE group_id = \$1`).
+		WithArgs(int64(55)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`(?s)UPDATE user_subscriptions.*RETURNING user_id`).
+		WithArgs(int64(55), int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{"user_id"}))
+	mock.ExpectExec(`INSERT INTO scheduler_outbox`).
+		WithArgs(SchedulerOutboxEventGroupChanged, nil, int64(55), nil).
+		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
+
+	svc := NewUserResourceService(db, nil, nil, nil)
+	if err := svc.DeleteGroup(context.Background(), 10, 55); err == nil {
+		t.Fatal("expected outbox failure to roll back group deletion")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestManualAssignmentCannotBypassSubscriberOptOut(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	now := time.Now()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)SELECT id, expires_at.*deleted_at, revoked_by_user_id.*FROM user_subscriptions`).
+		WithArgs(int64(21), int64(55)).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "expires_at", "notes", "deleted_at", "revoked_by_user_id"}).
+			AddRow(int64(77), now.Add(24*time.Hour), "", now, int64(21)))
+	mock.ExpectRollback()
+
+	svc := NewUserResourceService(db, nil, nil, nil)
+	_, err = svc.assignOrExtendSubscription(context.Background(), 10, 21, 55, 30, "", "manual", nil)
+	if infraerrors.Reason(err) != "SUBSCRIPTION_USER_UNSUBSCRIBED" {
+		t.Fatalf("expected subscriber opt-out conflict, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestClearAccountErrorRollsBackWhenSchedulerOutboxFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE accounts SET error_message = NULL`).
+		WithArgs(int64(55), int64(10)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO scheduler_outbox`).
+		WithArgs(SchedulerOutboxEventAccountChanged, int64(55), nil, nil).
+		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
+
+	svc := NewUserResourceService(db, nil, nil, nil)
+	if _, err := svc.ClearAccountError(context.Background(), 10, 55); err == nil {
+		t.Fatal("expected outbox failure to roll back account state update")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestCreateAccountRollsBackWhenSchedulerOutboxFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM accounts`).
+		WithArgs(int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO accounts .* RETURNING id`).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(55)))
+	mock.ExpectExec(`DELETE FROM account_groups WHERE account_id = \$1`).
+		WithArgs(int64(55)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`INSERT INTO scheduler_outbox`).
+		WithArgs(SchedulerOutboxEventAccountChanged, int64(55), nil, nil).
+		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
+
+	svc := NewUserResourceService(db, nil, nil, nil)
+	_, err = svc.CreateAccount(context.Background(), 10, map[string]any{
+		"name":        "account",
+		"platform":    PlatformAnthropic,
+		"type":        AccountTypeAPIKey,
+		"credentials": map[string]any{"api_key": "test-key"},
+	})
+	if err == nil {
+		t.Fatal("expected outbox failure to roll back account creation")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestRefreshAccountRollsBackWhenSchedulerOutboxFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM accounts`).
+		WithArgs(int64(55), int64(10)).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectBegin()
+	mock.ExpectExec(`(?s)UPDATE accounts.*rate_limit_reset_at`).
+		WithArgs(int64(55), int64(10)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`INSERT INTO scheduler_outbox`).
+		WithArgs(SchedulerOutboxEventAccountChanged, int64(55), nil, nil).
+		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
+
+	svc := NewUserResourceService(db, nil, nil, nil)
+	if _, err := svc.RefreshAccount(context.Background(), 10, 55); err == nil {
+		t.Fatal("expected outbox failure to roll back account refresh")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)

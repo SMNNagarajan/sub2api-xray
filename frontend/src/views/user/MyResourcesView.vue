@@ -359,7 +359,7 @@
               <button v-if="resource === 'assigned-subscriptions'" class="btn btn-xs btn-secondary" @click="openExtendAssigned(row)">{{ mr('actions.extend') }}</button>
               <button v-if="resource === 'assigned-subscriptions'" class="btn btn-xs btn-secondary" @click="resetAssignedUsage(row)">{{ mr('actions.resetUsage') }}</button>
               <button v-if="resource === 'assigned-subscriptions' && !row.deleted_at" class="btn btn-xs btn-danger" @click="revokeAssigned(row)">{{ mr('actions.revoke') }}</button>
-              <button v-if="resource === 'assigned-subscriptions' && row.deleted_at" class="btn btn-xs btn-secondary" @click="restoreAssigned(row)">{{ mr('actions.restore') }}</button>
+              <button v-if="resource === 'assigned-subscriptions' && row.deleted_at && row.revoked_by_user_id !== row.user_id" class="btn btn-xs btn-secondary" @click="restoreAssigned(row)">{{ mr('actions.restore') }}</button>
               <button v-if="resource === 'redeem-codes'" class="btn btn-xs btn-secondary" @click="openRedeemUsageDetails(row)">{{ mr('actions.details') }}</button>
               <button v-if="resource === 'redeem-codes' && row.status === 'unused'" class="btn btn-xs btn-secondary" @click="expireRedeemCode(row)">{{ mr('actions.expire') }}</button>
               <button v-if="resource === 'redeem-codes'" class="btn btn-xs btn-danger" @click="deleteItem(row)">{{ mr('actions.delete') }}</button>

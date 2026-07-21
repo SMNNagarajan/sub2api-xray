@@ -508,6 +508,14 @@ func (r *proxyRepository) CountAccountsByProxyID(ctx context.Context, proxyID in
 	return count, nil
 }
 
+func (r *proxyRepository) CountFallbackReferencesByProxyID(ctx context.Context, proxyID int64) (int64, error) {
+	var count int64
+	if err := scanSingleRow(ctx, r.sql, "SELECT COUNT(*) FROM proxies WHERE backup_proxy_id = $1 AND deleted_at IS NULL", []any{proxyID}, &count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 // CountUserOwnedAccountsByProxyID returns the number of active user-owned accounts
 // that rely on a public system proxy.
 func (r *proxyRepository) CountUserOwnedAccountsByProxyID(ctx context.Context, proxyID int64) (int64, error) {

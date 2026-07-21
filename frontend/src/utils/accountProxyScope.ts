@@ -1,5 +1,7 @@
 import type { Proxy } from '@/types'
 
+export type AccountResourceScope = 'admin' | 'user'
+
 export function filterAccountCompatibleProxies(
   proxies: Proxy[],
   accountOwnerUserId: number | null | undefined
@@ -11,6 +13,27 @@ export function filterAccountCompatibleProxies(
   return proxies.filter(proxy =>
     proxy.owner_user_id === accountOwnerUserId || proxy.is_public === true
   )
+}
+
+export function isUserSelectableProxy(proxy: Proxy, now = Date.now()): boolean {
+  if (proxy.status !== 'active') return false
+  if (proxy.expires_at == null || proxy.expires_at === '') return true
+
+  const expiresAt = new Date(proxy.expires_at).getTime()
+  return Number.isFinite(expiresAt) && expiresAt > now
+}
+
+export function proxiesForAccountScope(
+  proxies: Proxy[],
+  scope: AccountResourceScope,
+  accountOwnerUserId?: number | null
+): Proxy[] {
+  if (scope === 'user') {
+    return filterAccountCompatibleProxies(proxies, accountOwnerUserId)
+      .filter(proxy => isUserSelectableProxy(proxy))
+  }
+
+  return filterAccountCompatibleProxies(proxies, accountOwnerUserId)
 }
 
 export function toUnixSeconds(value: unknown): number | null {

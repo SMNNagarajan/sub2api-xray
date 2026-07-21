@@ -148,7 +148,7 @@
 
             <!-- Whitelist Mode -->
             <div v-if="modelRestrictionMode === 'whitelist'">
-              <ModelWhitelistSelector v-model="allowedModels" :platform="account?.platform || 'anthropic'" :account-id="account?.id" />
+              <ModelWhitelistSelector v-model="allowedModels" :platform="account?.platform || 'anthropic'" :account-id="account?.id" :scope="props.scope" />
               <p class="text-xs text-gray-500 dark:text-gray-400">
                 {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
                 <span v-if="allowedModels.length === 0 && modelMappings.length === 0">{{
@@ -578,7 +578,7 @@
 
           <!-- Whitelist Mode -->
           <div v-if="modelRestrictionMode === 'whitelist'">
-            <ModelWhitelistSelector v-model="allowedModels" :platform="account?.platform || 'anthropic'" :account-id="account?.id" />
+            <ModelWhitelistSelector v-model="allowedModels" :platform="account?.platform || 'anthropic'" :account-id="account?.id" :scope="props.scope" />
             <p class="text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
               <span v-if="allowedModels.length === 0 && modelMappings.length === 0">{{
@@ -790,7 +790,7 @@
 
           <!-- Whitelist Mode -->
           <div v-if="modelRestrictionMode === 'whitelist'">
-            <ModelWhitelistSelector v-model="allowedModels" :platform="account?.platform || 'anthropic'" :account-id="account?.id" />
+            <ModelWhitelistSelector v-model="allowedModels" :platform="account?.platform || 'anthropic'" :account-id="account?.id" :scope="props.scope" />
             <p class="text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
               <span v-if="allowedModels.length === 0 && modelMappings.length === 0">{{
@@ -1012,7 +1012,7 @@
 
           <!-- Whitelist Mode -->
           <div v-if="modelRestrictionMode === 'whitelist'">
-            <ModelWhitelistSelector v-model="allowedModels" platform="anthropic" />
+            <ModelWhitelistSelector v-model="allowedModels" platform="anthropic" :scope="props.scope" />
             <p class="text-xs text-gray-500 dark:text-gray-400">
               {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
               <span v-if="allowedModels.length === 0 && modelMappings.length === 0">{{ t('admin.accounts.supportsAllModels') }}</span>
@@ -2464,7 +2464,7 @@
       <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <div>
           <label class="input-label">{{ t('common.status') }}</label>
-          <Select v-model="form.status" :options="statusOptions" />
+          <Select v-model="form.status" :options="statusOptions" data-testid="account-status" />
         </div>
 
         <!-- Mixed Scheduling (only for antigravity accounts, read-only in edit mode) -->
@@ -2528,11 +2528,13 @@
 
       <!-- Group Selection - 仅标准模式显示 -->
       <GroupSelector
-        v-if="!authStore.isSimpleMode"
+        v-if="isUserScope || !authStore.isSimpleMode"
         v-model="form.group_ids"
         :groups="groups"
         :platform="account?.platform"
         :mixed-scheduling="mixedScheduling"
+        :owner-user-id="account?.owner_user_id ?? (isUserScope ? authStore.user?.id : null)"
+        enforce-owner
         data-tour="account-form-groups"
       />
 
@@ -2634,7 +2636,7 @@ import {
   type HeaderOverrideRow
 } from '@/components/account/credentialsBuilder'
 import { formatDateTime, formatDateTimeLocalInput, parseDateTimeLocalInput } from '@/utils/format'
-import { filterAccountCompatibleProxies, toUserAccountPayload } from '@/utils/accountProxyScope'
+import { proxiesForAccountScope, toUserAccountPayload } from '@/utils/accountProxyScope'
 import { createStableObjectKeyResolver } from '@/utils/stableObjectKey'
 import { VERTEX_LOCATION_OPTIONS } from '@/constants/account'
 import {
@@ -2676,7 +2678,11 @@ const appStore = useAppStore()
 const authStore = useAuthStore()
 const isUserScope = computed(() => props.scope === 'user')
 const compatibleProxies = computed(() =>
-  filterAccountCompatibleProxies(props.proxies, props.account?.owner_user_id)
+  proxiesForAccountScope(
+    props.proxies,
+    props.scope,
+    props.account?.owner_user_id ?? (isUserScope.value ? authStore.user?.id : null)
+  )
 )
 const testUserProxy = (id: number) => myResourcesApi.proxies.test(id)
 
@@ -3164,16 +3170,21 @@ const form = reactive({
   load_factor: null as number | null,
   priority: 1,
   rate_multiplier: 1,
-  status: 'active' as 'active' | 'inactive' | 'error',
+  status: 'active' as 'active' | 'inactive' | 'disabled' | 'error',
   group_ids: [] as number[],
   expires_at: null as number | null
 })
 
 const statusOptions = computed(() => {
-  const options = [
-    { value: 'active', label: t('common.active') },
-    { value: 'inactive', label: t('common.inactive') }
-  ]
+  const options = isUserScope.value
+    ? [
+        { value: 'active', label: t('common.active') },
+        { value: 'disabled', label: t('common.disabled') }
+      ]
+    : [
+        { value: 'active', label: t('common.active') },
+        { value: 'inactive', label: t('common.inactive') }
+      ]
   if (form.status === 'error') {
     options.push({ value: 'error', label: t('admin.accounts.status.error') })
   }
@@ -3253,8 +3264,11 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   form.load_factor = newAccount.load_factor ?? null
   form.priority = newAccount.priority
   form.rate_multiplier = newAccount.rate_multiplier ?? 1
-  form.status = (newAccount.status === 'active' || newAccount.status === 'inactive' || newAccount.status === 'error')
-    ? newAccount.status
+  const accountStatus = newAccount.status === 'inactive' && isUserScope.value
+    ? 'disabled'
+    : newAccount.status
+  form.status = (accountStatus === 'active' || accountStatus === 'inactive' || accountStatus === 'disabled' || accountStatus === 'error')
+    ? accountStatus
     : 'active'
   form.group_ids = newAccount.group_ids || []
   form.expires_at = newAccount.expires_at ?? null
@@ -4049,7 +4063,10 @@ const handleSubmit = async () => {
   if (!props.account) return
   const accountID = props.account.id
 
-  if (form.status !== 'active' && form.status !== 'inactive' && form.status !== 'error') {
+  const validStatus = isUserScope.value
+    ? form.status === 'active' || form.status === 'disabled' || form.status === 'error'
+    : form.status === 'active' || form.status === 'inactive' || form.status === 'error'
+  if (!validStatus) {
     appStore.showError(t('admin.accounts.pleaseSelectStatus'))
     return
   }

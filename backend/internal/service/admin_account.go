@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	dbent "github.com/Wei-Shaw/sub2api/ent"
+	dbaccountgroup "github.com/Wei-Shaw/sub2api/ent/accountgroup"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -566,6 +568,82 @@ func (s *adminServiceImpl) validateAccountProxyOwner(ctx context.Context, accoun
 	return infraerrors.BadRequest("ACCOUNT_PROXY_OWNER_MISMATCH", "user accounts can only use owned or public proxies")
 }
 
+// validateAccountGroupOwners performs the service-layer half of the account/group
+// isolation rule. The database trigger remains the final guard for concurrent
+// ownership changes, but normal requests receive a stable business error before
+// any account row is written.
+func (s *adminServiceImpl) validateAccountGroupOwners(ctx context.Context, accountOwnerID *int64, groupIDs []int64) error {
+	if len(groupIDs) == 0 {
+		return nil
+	}
+	if s.groupRepo == nil {
+		return infraerrors.ServiceUnavailable("ACCOUNT_GROUP_VALIDATION_UNAVAILABLE", "group validation is not available")
+	}
+
+	seen := make(map[int64]struct{}, len(groupIDs))
+	for _, groupID := range groupIDs {
+		if groupID <= 0 {
+			return infraerrors.BadRequest("ACCOUNT_GROUP_INVALID", "account group IDs must be positive")
+		}
+		if _, exists := seen[groupID]; exists {
+			return infraerrors.BadRequest("ACCOUNT_GROUP_DUPLICATE", "account group IDs must be unique")
+		}
+		seen[groupID] = struct{}{}
+
+		group, err := s.groupRepo.GetByID(ctx, groupID)
+		if err != nil {
+			return fmt.Errorf("get account group %d: %w", groupID, err)
+		}
+		if !sameResourceOwner(accountOwnerID, group.OwnerUserID) {
+			if accountOwnerID == nil {
+				return infraerrors.BadRequest("ACCOUNT_GROUP_OWNER_MISMATCH", "system accounts can only use system groups")
+			}
+			return infraerrors.BadRequest("ACCOUNT_GROUP_OWNER_MISMATCH", "user accounts can only use groups owned by the same user")
+		}
+	}
+	return nil
+}
+
+func accountGroupsFromIDs(groupIDs []int64) []AccountGroup {
+	groups := make([]AccountGroup, 0, len(groupIDs))
+	for i, groupID := range groupIDs {
+		groups = append(groups, AccountGroup{GroupID: groupID, Priority: i + 1})
+	}
+	return groups
+}
+
+// translateAccountOwnerConstraintError handles the race where a resource owner
+// changes after the service pre-check but before the database trigger evaluates.
+func translateAccountOwnerConstraintError(err error) error {
+	if err == nil {
+		return nil
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "account and group owners must match"):
+		return infraerrors.Conflict("ACCOUNT_GROUP_OWNER_CONFLICT", "account or group ownership changed while saving; retry with matching resources")
+	case strings.Contains(message, "system accounts cannot use user-owned proxies"),
+		strings.Contains(message, "user accounts can only use owned or public system proxies"):
+		return infraerrors.Conflict("ACCOUNT_PROXY_OWNER_CONFLICT", "account or proxy ownership changed while saving; retry with a compatible proxy")
+	default:
+		return err
+	}
+}
+
+func (s *adminServiceImpl) createAccountWithGroups(ctx context.Context, account *Account, groupIDs []int64) error {
+	creator := s.accountDuplicateRepo
+	if creator == nil {
+		creator, _ = s.accountRepo.(AccountDuplicateRepository)
+	}
+	if creator != nil {
+		return translateAccountOwnerConstraintError(creator.CreateWithAccountGroups(ctx, account, accountGroupsFromIDs(groupIDs)))
+	}
+	if len(groupIDs) > 0 {
+		return infraerrors.ServiceUnavailable("ACCOUNT_ATOMIC_CREATE_UNAVAILABLE", "atomic account and group creation is not available")
+	}
+	return translateAccountOwnerConstraintError(s.accountRepo.Create(ctx, account))
+}
+
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
 	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
 	if err != nil {
@@ -584,7 +662,7 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		groups, err := s.groupRepo.ListActiveByPlatform(ctx, input.Platform)
 		if err == nil {
 			for _, g := range groups {
-				if g.Name == defaultGroupName {
+				if g.Name == defaultGroupName && g.OwnerUserID == nil {
 					groupIDs = []int64{g.ID}
 					break
 				}
@@ -593,6 +671,10 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	}
 
 	// 检查混合渠道风险（除非用户已确认）
+	if err := s.validateAccountGroupOwners(ctx, nil, groupIDs); err != nil {
+		return nil, err
+	}
+
 	if len(groupIDs) > 0 && !input.SkipMixedChannelCheck {
 		if err := s.checkMixedChannelRisk(ctx, 0, input.Platform, groupIDs); err != nil {
 			return nil, err
@@ -611,15 +693,8 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err := s.validateAccountProxyOwner(ctx, nil, account.ProxyID); err != nil {
 		return nil, err
 	}
-	if err := s.accountRepo.Create(ctx, account); err != nil {
+	if err := s.createAccountWithGroups(ctx, account, groupIDs); err != nil {
 		return nil, err
-	}
-
-	// 绑定分组
-	if len(groupIDs) > 0 {
-		if err := s.accountRepo.BindGroups(ctx, account.ID, groupIDs); err != nil {
-			return nil, err
-		}
 	}
 
 	// OAuth 账号：创建后异步设置隐私。
@@ -654,10 +729,141 @@ type accountProbeEnabledAtomicUpdater interface {
 	UpdateWithUpstreamBillingProbeEnabled(context.Context, *Account, bool) error
 }
 
+// adminAccountGroupAtomicUpdater is the test-double/fallback contract used when
+// an AdminService is constructed without the Ent client. Production uses the
+// Ent transaction below.
+type adminAccountGroupAtomicUpdater interface {
+	UpdateAccountWithGroupsAtomically(context.Context, *Account, []int64, *bool) error
+}
+
+func (s *adminServiceImpl) persistAdminAccount(ctx context.Context, account *Account, requestedProbeEnabledUpdate *bool) error {
+	if requestedProbeEnabledUpdate != nil && isUpstreamBillingProbeAccount(account) {
+		if updater, ok := s.accountRepo.(accountProbeEnabledAtomicUpdater); ok {
+			return translateAccountOwnerConstraintError(updater.UpdateWithUpstreamBillingProbeEnabled(ctx, account, *requestedProbeEnabledUpdate))
+		}
+	}
+	if err := s.accountRepo.Update(ctx, account); err != nil {
+		return translateAccountOwnerConstraintError(err)
+	}
+	if requestedProbeEnabledUpdate != nil && isUpstreamBillingProbeAccount(account) {
+		if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{
+			UpstreamBillingProbeEnabledExtraKey: *requestedProbeEnabledUpdate,
+		}); err != nil {
+			return translateAccountOwnerConstraintError(err)
+		}
+	}
+	return nil
+}
+
+func mergeAccountGroupIDs(oldGroupIDs, newGroupIDs []int64) []int64 {
+	merged := make([]int64, 0, len(oldGroupIDs)+len(newGroupIDs))
+	seen := make(map[int64]struct{}, cap(merged))
+	for _, groupIDs := range [][]int64{oldGroupIDs, newGroupIDs} {
+		for _, groupID := range groupIDs {
+			if groupID <= 0 {
+				continue
+			}
+			if _, exists := seen[groupID]; exists {
+				continue
+			}
+			seen[groupID] = struct{}{}
+			merged = append(merged, groupID)
+		}
+	}
+	return merged
+}
+
+func replaceAccountGroups(ctx context.Context, client *dbent.Client, accountID int64, groupIDs []int64) error {
+	if _, err := client.AccountGroup.Delete().Where(dbaccountgroup.AccountIDEQ(accountID)).Exec(ctx); err != nil {
+		return err
+	}
+	if len(groupIDs) == 0 {
+		return nil
+	}
+
+	builders := make([]*dbent.AccountGroupCreate, 0, len(groupIDs))
+	for i, groupID := range groupIDs {
+		builders = append(builders, client.AccountGroup.Create().
+			SetAccountID(accountID).
+			SetGroupID(groupID).
+			SetPriority(i+1))
+	}
+	_, err := client.AccountGroup.CreateBulk(builders...).Save(ctx)
+	return err
+}
+
+func (s *adminServiceImpl) updateAccountWithGroupsAtomically(
+	ctx context.Context,
+	account *Account,
+	desiredGroupIDs []int64,
+	requestedProbeEnabledUpdate *bool,
+	propagateProxy bool,
+) error {
+	desiredGroupIDs = append([]int64(nil), desiredGroupIDs...)
+	// The account update outbox payload must include both old and new groups so
+	// scheduler buckets removed by this edit are rebuilt as well.
+	account.GroupIDs = mergeAccountGroupIDs(account.GroupIDs, desiredGroupIDs)
+
+	apply := func(txCtx context.Context, client *dbent.Client) error {
+		if err := s.persistAdminAccount(txCtx, account, requestedProbeEnabledUpdate); err != nil {
+			return err
+		}
+		if propagateProxy {
+			if err := s.propagateProxyToShadows(txCtx, account.ID, account.ProxyID); err != nil {
+				return err
+			}
+		}
+		return translateAccountOwnerConstraintError(replaceAccountGroups(txCtx, client, account.ID, desiredGroupIDs))
+	}
+
+	if existingTx := dbent.TxFromContext(ctx); existingTx != nil {
+		return apply(ctx, existingTx.Client())
+	}
+	if s.entClient == nil {
+		updater, ok := s.accountRepo.(adminAccountGroupAtomicUpdater)
+		if !ok {
+			return infraerrors.ServiceUnavailable("ACCOUNT_ATOMIC_UPDATE_UNAVAILABLE", "atomic account and group update is not available")
+		}
+		if err := updater.UpdateAccountWithGroupsAtomically(ctx, account, desiredGroupIDs, requestedProbeEnabledUpdate); err != nil {
+			return translateAccountOwnerConstraintError(err)
+		}
+		if propagateProxy {
+			return s.propagateProxyToShadows(ctx, account.ID, account.ProxyID)
+		}
+		return nil
+	}
+
+	tx, err := s.entClient.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	if err := apply(txCtx, tx.Client()); err != nil {
+		return err
+	}
+	return translateAccountOwnerConstraintError(tx.Commit())
+}
+
 func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error) {
 	account, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if input.ProxyID != nil && !account.IsCredentialShadow() {
+		if err := s.validateAccountProxyOwner(ctx, account.OwnerUserID, input.ProxyID); err != nil {
+			return nil, err
+		}
+	}
+	if input.GroupIDs != nil {
+		if err := s.validateAccountGroupOwners(ctx, account.OwnerUserID, *input.GroupIDs); err != nil {
+			return nil, err
+		}
+		if !input.SkipMixedChannelCheck {
+			if err := s.checkMixedChannelRisk(ctx, account.ID, account.Platform, *input.GroupIDs); err != nil {
+				return nil, err
+			}
+		}
 	}
 	var normalizedExtra map[string]any
 	if input.Extra != nil {
@@ -778,9 +984,6 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 	// 影子代理恒继承母账号(由 propagateProxyToShadows 同步),不接受独立编辑——外审 B/P1;
 	// 否则要等母账号下次改 proxy 才被覆盖,期间影子会出现"有时继承、有时独立"的漂移。
 	if input.ProxyID != nil && !account.IsCredentialShadow() {
-		if err := s.validateAccountProxyOwner(ctx, account.OwnerUserID, input.ProxyID); err != nil {
-			return nil, err
-		}
 		// 0 表示清除代理（前端发送 0 而不是 null 来表达清除意图）
 		if *input.ProxyID == 0 {
 			account.ProxyID = nil
@@ -833,54 +1036,21 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		account.AutoPauseOnExpired = *input.AutoPauseOnExpired
 	}
 
-	// 先验证分组是否存在（在任何写操作之前）
+	propagateProxy := input.ProxyID != nil && !account.IsCredentialShadow()
 	if input.GroupIDs != nil {
-		if err := s.validateGroupIDsExist(ctx, *input.GroupIDs); err != nil {
+		if err := s.updateAccountWithGroupsAtomically(ctx, account, *input.GroupIDs, requestedProbeEnabledUpdate, propagateProxy); err != nil {
 			return nil, err
 		}
-
-		// 检查混合渠道风险（除非用户已确认）
-		if !input.SkipMixedChannelCheck {
-			if err := s.checkMixedChannelRisk(ctx, account.ID, account.Platform, *input.GroupIDs); err != nil {
+	} else {
+		if err := s.persistAdminAccount(ctx, account, requestedProbeEnabledUpdate); err != nil {
+			return nil, err
+		}
+		// 将 proxy 变更传播到 spark 影子账号（同步；Update 内部已触发调度快照）。
+		// 影子自身 proxy 不可独立编辑(见上),故对影子的更新不触发传播。
+		if propagateProxy {
+			if err := s.propagateProxyToShadows(ctx, id, account.ProxyID); err != nil {
 				return nil, err
 			}
-		}
-	}
-
-	probeEnabledAppliedAtomically := false
-	if requestedProbeEnabledUpdate != nil && isUpstreamBillingProbeAccount(account) {
-		if updater, ok := s.accountRepo.(accountProbeEnabledAtomicUpdater); ok {
-			if err := updater.UpdateWithUpstreamBillingProbeEnabled(ctx, account, *requestedProbeEnabledUpdate); err != nil {
-				return nil, err
-			}
-			probeEnabledAppliedAtomically = true
-		}
-	}
-	if !probeEnabledAppliedAtomically {
-		if err := s.accountRepo.Update(ctx, account); err != nil {
-			return nil, err
-		}
-		if requestedProbeEnabledUpdate != nil && isUpstreamBillingProbeAccount(account) {
-			if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{
-				UpstreamBillingProbeEnabledExtraKey: *requestedProbeEnabledUpdate,
-			}); err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	// 将 proxy 变更传播到 spark 影子账号（同步；Update 内部已触发调度快照）。
-	// 影子自身 proxy 不可独立编辑(见上),故对影子的更新不触发传播。
-	if input.ProxyID != nil && !account.IsCredentialShadow() {
-		if err := s.propagateProxyToShadows(ctx, id, account.ProxyID); err != nil {
-			return nil, err
-		}
-	}
-
-	// 绑定分组
-	if input.GroupIDs != nil {
-		if err := s.accountRepo.BindGroups(ctx, account.ID, *input.GroupIDs); err != nil {
-			return nil, err
 		}
 	}
 

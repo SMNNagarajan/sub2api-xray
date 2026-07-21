@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -21,6 +22,8 @@ type MyResourceHandler struct {
 	userResourceService *service.UserResourceService
 	settingService      *service.SettingService
 }
+
+const maxMyResourceBatchIDs = 1000
 
 func NewMyResourceHandler(userResourceService *service.UserResourceService, settingService *service.SettingService) *MyResourceHandler {
 	return &MyResourceHandler{
@@ -164,6 +167,22 @@ func int64SliceFromAny(v any) []int64 {
 		}
 		return nil
 	}
+}
+
+func uniquePositiveIDs(ids []int64) []int64 {
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func int64FromAny(v any) int64 {
@@ -520,6 +539,77 @@ func (h *MyResourceHandler) GetAccount(c *gin.Context) {
 	}
 	service.RedactAccountForUserResponse(item)
 	response.Success(c, item)
+}
+
+func writeMyUpstreamModelSyncError(c *gin.Context, err error) {
+	var syncErr *service.UpstreamModelSyncError
+	if !errors.As(err, &syncErr) {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if syncErr.Kind == service.UpstreamModelSyncErrorConfiguration || syncErr.Kind == service.UpstreamModelSyncErrorUnsupported {
+		response.BadRequest(c, syncErr.SafeMessage())
+		return
+	}
+	response.Error(c, http.StatusBadGateway, syncErr.SafeMessage())
+}
+
+func (h *MyResourceHandler) SyncAccountUpstreamModels(c *gin.Context) {
+	userID, ok := h.currentUser(c)
+	if !ok {
+		return
+	}
+	accountID, ok := parseInt64Param(c, "id")
+	if !ok {
+		return
+	}
+	models, err := h.userResourceService.SyncAccountUpstreamModels(c.Request.Context(), userID, accountID)
+	if err != nil {
+		writeMyUpstreamModelSyncError(c, err)
+		return
+	}
+	response.Success(c, gin.H{"models": models})
+}
+
+func (h *MyResourceHandler) SyncAccountUpstreamModelsPreview(c *gin.Context) {
+	userID, ok := h.currentUser(c)
+	if !ok {
+		return
+	}
+	payload, ok := bindJSONMap(c)
+	if !ok {
+		return
+	}
+	var input service.UserUpstreamModelsPreviewInput
+	if err := decodeMyResourcePayload(payload, &input); err != nil {
+		response.BadRequest(c, "Invalid upstream model sync preview request")
+		return
+	}
+	models, err := h.userResourceService.SyncAccountUpstreamModelsPreview(c.Request.Context(), userID, input)
+	if err != nil {
+		writeMyUpstreamModelSyncError(c, err)
+		return
+	}
+	response.Success(c, gin.H{"models": models})
+}
+
+func (h *MyResourceHandler) GetGeminiOAuthCapabilities(c *gin.Context) {
+	if _, ok := h.currentUser(c); !ok {
+		return
+	}
+	capabilities, err := h.userResourceService.GetGeminiOAuthCapabilities()
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, capabilities)
+}
+
+func (h *MyResourceHandler) GetAntigravityDefaultModelMapping(c *gin.Context) {
+	if _, ok := h.currentUser(c); !ok {
+		return
+	}
+	response.Success(c, h.userResourceService.GetAntigravityDefaultModelMapping())
 }
 
 func (h *MyResourceHandler) CreateAccount(c *gin.Context) {
@@ -1216,8 +1306,13 @@ func (h *MyResourceHandler) BatchDeleteRedeemCodes(c *gin.Context) {
 	if !ok {
 		return
 	}
+	ids := uniquePositiveIDs(int64SliceFromAny(payload["ids"]))
+	if len(ids) > maxMyResourceBatchIDs {
+		response.BadRequest(c, "Too many redeem code IDs; maximum is 1000")
+		return
+	}
 	var deleted int
-	for _, id := range int64SliceFromAny(payload["ids"]) {
+	for _, id := range ids {
 		if err := h.userResourceService.DeleteRedeemCode(c.Request.Context(), userID, id); err == nil {
 			deleted++
 		}
@@ -1234,8 +1329,13 @@ func (h *MyResourceHandler) BatchExpireRedeemCodes(c *gin.Context) {
 	if !ok {
 		return
 	}
+	ids := uniquePositiveIDs(int64SliceFromAny(payload["ids"]))
+	if len(ids) > maxMyResourceBatchIDs {
+		response.BadRequest(c, "Too many redeem code IDs; maximum is 1000")
+		return
+	}
 	var updated int
-	for _, id := range int64SliceFromAny(payload["ids"]) {
+	for _, id := range ids {
 		if _, err := h.userResourceService.ExpireRedeemCode(c.Request.Context(), userID, id); err == nil {
 			updated++
 		}

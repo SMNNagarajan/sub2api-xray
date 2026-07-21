@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"database/sql"
 	"strings"
 	"testing"
 
@@ -68,5 +69,97 @@ func TestUserResourceServiceCloseWithoutSchedulerIsSafe(t *testing.T) {
 	svc := NewUserResourceService(nil, nil, nil, nil)
 	if err := svc.Close(); err != nil {
 		t.Fatalf("close service: %v", err)
+	}
+}
+
+func TestDeleteProxySourceRollsBackWhenNodeDisableFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE proxy_sources SET deleted_at`).
+		WithArgs(int64(44), int64(9)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`(?s)UPDATE proxies.*RETURNING id`).
+		WithArgs(int64(9), "44", sqlmock.AnyArg()).
+		WillReturnError(context.DeadlineExceeded)
+	mock.ExpectRollback()
+
+	svc := NewUserResourceService(db, nil, nil, nil)
+	if err := svc.DeleteProxySource(context.Background(), 9, 44); err == nil {
+		t.Fatal("expected proxy node disable failure")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestSyncProxySourceNodesRollsBackWhenStatusWriteFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	proxyColumns := []string{
+		"id", "owner_user_id", "is_public", "kind", "name", "protocol", "host", "port",
+		"username", "password", "status", "expires_at", "fallback_mode", "backup_proxy_id",
+		"expiry_warn_days", "extra",
+	}
+	mock.ExpectQuery(`(?s)SELECT id, owner_user_id.*FROM proxies`).
+		WithArgs(int64(9), "44").
+		WillReturnRows(sqlmock.NewRows(proxyColumns))
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT id FROM proxy_sources`).
+		WithArgs(int64(44), int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(44)))
+	mock.ExpectQuery(`(?s)SELECT id, owner_user_id.*FROM proxies`).
+		WithArgs(int64(9), "44").
+		WillReturnRows(sqlmock.NewRows(proxyColumns))
+	mock.ExpectQuery(`SELECT COUNT\(\*\) FROM proxies`).
+		WithArgs(int64(9)).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery(`INSERT INTO proxies .* RETURNING id`).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(101)))
+	mock.ExpectQuery(`(?s)UPDATE proxies.*RETURNING id`).
+		WithArgs(int64(9), "44", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectExec(`UPDATE proxy_sources.*last_sync_status`).
+		WillReturnError(sql.ErrConnDone)
+	mock.ExpectRollback()
+
+	svc := NewUserResourceService(db, nil, nil, nil)
+	_, err = svc.syncProxySourceNodes(context.Background(), 9, 44, "source", "http://1.1.1.1:8080#node", false)
+	if err == nil {
+		t.Fatal("expected source status failure to roll back node changes")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
+func TestClearProxyDependentProbeIncludesFallbackUsers(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("create sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	mock.ExpectQuery(`(?s)UPDATE accounts.*backup_proxy_id = ANY.*RETURNING id`).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(12)).AddRow(int64(13)))
+
+	ids, err := clearProxyDependentProbeWith(context.Background(), db, []int64{101})
+	if err != nil {
+		t.Fatalf("clear dependent probes: %v", err)
+	}
+	if len(ids) != 2 || ids[0] != 12 || ids[1] != 13 {
+		t.Fatalf("unexpected dependent account ids: %v", ids)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
 	}
 }

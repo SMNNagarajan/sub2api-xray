@@ -67,6 +67,22 @@ export interface UserOAuthCredentialsResult {
   suggested_name?: string
 }
 
+export interface SyncUpstreamModelsResult {
+  models: string[]
+}
+
+export interface SyncUpstreamPreviewParams {
+  platform: string
+  type: string
+  base_url?: string
+  api_key: string
+}
+
+export interface GeminiOAuthCapabilities {
+  ai_studio_oauth_enabled: boolean
+  required_redirect_uris: string[]
+}
+
 export type ResourceItem = Record<string, any>
 
 export interface UserProxyTestResult {
@@ -117,7 +133,14 @@ export const myResourcesApi = {
       authURL: async (payload: UserOAuthAuthURLPayload) => (await apiClient.post<ResourceItem>('/my/accounts/oauth/auth-url', payload)).data,
       exchange: async (payload: UserOAuthExchangePayload) => (await apiClient.post<UserOAuthCredentialsResult>('/my/accounts/oauth/exchange', payload)).data,
       cookie: async (payload: { proxy_id?: number; setup_token?: boolean; session_key: string }) => (await apiClient.post<UserOAuthCredentialsResult>('/my/accounts/oauth/cookie', payload)).data,
+      geminiCapabilities: async () => (await apiClient.get<GeminiOAuthCapabilities>('/my/accounts/oauth/gemini/capabilities')).data,
     },
+    syncUpstreamModels: async (id: number): Promise<SyncUpstreamModelsResult> =>
+      (await apiClient.post<SyncUpstreamModelsResult>(`/my/accounts/${id}/models/sync-upstream`)).data,
+    syncUpstreamModelsPreview: async (payload: SyncUpstreamPreviewParams): Promise<SyncUpstreamModelsResult> =>
+      (await apiClient.post<SyncUpstreamModelsResult>('/my/accounts/models/sync-upstream-preview', payload)).data,
+    getAntigravityDefaultModelMapping: async (): Promise<Record<string, string>> =>
+      (await apiClient.get<Record<string, string>>('/my/accounts/antigravity/default-model-mapping')).data,
     getAvailableModels: async (id: number) => (await apiClient.get<ClaudeModel[]>(`/my/accounts/${id}/models`)).data,
     test: async (id: number) => (await apiClient.post(`/my/accounts/${id}/test`)).data,
     refresh: async (id: number) => (await apiClient.post<ResourceItem>(`/my/accounts/${id}/refresh`)).data,

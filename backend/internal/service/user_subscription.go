@@ -25,6 +25,7 @@ type UserSubscription struct {
 	ManagedByUserID    *int64
 	SourceType         string
 	SourceRedeemCodeID *int64
+	RevokedByUserID    *int64
 	AssignedAt         time.Time
 	Notes              string
 

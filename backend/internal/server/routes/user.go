@@ -150,6 +150,7 @@ func RegisterUserRoutes(
 			{
 				accounts.GET("", h.MyResources.ListAccounts)
 				accounts.POST("", h.MyResources.CreateAccount)
+				registerMyAccountModelCapabilityRoutes(accounts, h.MyResources)
 				accounts.GET("/export", h.MyResources.ExportAccounts)
 				accounts.POST("/import", h.MyResources.ImportAccounts)
 				accounts.POST("/import/codex-session", h.MyResources.ImportCodexSessions)
@@ -227,4 +228,11 @@ func RegisterUserRoutes(
 			monitors.GET("/:id/status", h.ChannelMonitor.GetStatus)
 		}
 	}
+}
+
+func registerMyAccountModelCapabilityRoutes(accounts *gin.RouterGroup, h *handler.MyResourceHandler) {
+	accounts.POST("/models/sync-upstream-preview", h.SyncAccountUpstreamModelsPreview)
+	accounts.GET("/oauth/gemini/capabilities", h.GetGeminiOAuthCapabilities)
+	accounts.GET("/antigravity/default-model-mapping", h.GetAntigravityDefaultModelMapping)
+	accounts.POST("/:id/models/sync-upstream", h.SyncAccountUpstreamModels)
 }

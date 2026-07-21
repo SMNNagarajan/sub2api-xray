@@ -7,8 +7,10 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math"
 	"net"
 	"net/http"
@@ -20,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
@@ -42,6 +45,7 @@ const (
 	userResourceMaxAccounts     = 1000
 	userResourceMaxProxies      = 1000
 	userResourceMaxProxySources = 100
+	userResourceMaxNotesBytes   = 4096
 )
 
 type UserResourceService struct {
@@ -74,8 +78,16 @@ type UserResourceService struct {
 	proxyQualityRunner   userProxyQualityRunner
 }
 
+type UserUpstreamModelsPreviewInput struct {
+	Platform string `json:"platform"`
+	Type     string `json:"type"`
+	BaseURL  string `json:"base_url"`
+	APIKey   string `json:"api_key"`
+}
+
 type userResourceDBTX interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
@@ -106,6 +118,24 @@ func (s *UserResourceService) SetAccountMaintenanceServices(accountTestService *
 	}
 	s.accountTestService = accountTestService
 	s.tokenRefreshService = tokenRefreshService
+}
+
+func (s *UserResourceService) scheduleOpenAIResponsesProbe(account map[string]any) {
+	if s == nil || s.accountTestService == nil || urAsString(account["platform"]) != PlatformOpenAI || urAsString(account["type"]) != AccountTypeAPIKey {
+		return
+	}
+	accountID := urToInt64(account["id"])
+	if accountID <= 0 {
+		return
+	}
+	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				slog.Error("user_openai_responses_probe_panic", "account_id", accountID, "recover", recovered)
+			}
+		}()
+		s.accountTestService.ProbeOpenAIAPIKeyResponsesSupport(context.Background(), accountID)
+	}()
 }
 
 func (s *UserResourceService) SetOAuthServices(
@@ -764,6 +794,13 @@ func nextArg(args *[]any, v any) string {
 	return fmt.Sprintf("$%d", len(*args))
 }
 
+func validateUserResourceNotes(notes string) error {
+	if len([]byte(notes)) > userResourceMaxNotesBytes {
+		return infraerrors.BadRequest("USER_RESOURCE_NOTES_TOO_LARGE", fmt.Sprintf("notes cannot exceed %d bytes", userResourceMaxNotesBytes))
+	}
+	return nil
+}
+
 func ownedWhere(alias string, ownerID int64, args *[]any) []string {
 	return []string{
 		alias + ".deleted_at IS NULL",
@@ -1047,7 +1084,7 @@ func (s *UserResourceService) SetGroupRateMultipliers(ctx context.Context, owner
 	if err := s.userGroupRateRepo.SyncGroupRateMultipliers(ctx, groupID, entries); err != nil {
 		return err
 	}
-	s.invalidateGroup(ctx, groupID)
+	s.invalidateGroupAuthCache(ctx, groupID)
 	return nil
 }
 
@@ -1074,7 +1111,7 @@ func (s *UserResourceService) SetGroupRPMOverrides(ctx context.Context, ownerID,
 	if err := s.userGroupRateRepo.SyncGroupRPMOverrides(ctx, groupID, entries); err != nil {
 		return err
 	}
-	s.invalidateGroup(ctx, groupID)
+	s.invalidateGroupAuthCache(ctx, groupID)
 	return nil
 }
 
@@ -1088,7 +1125,7 @@ func (s *UserResourceService) ClearGroupRateMultipliers(ctx context.Context, own
 	if err := s.userGroupRateRepo.SyncGroupRateMultipliers(ctx, groupID, nil); err != nil {
 		return err
 	}
-	s.invalidateGroup(ctx, groupID)
+	s.invalidateGroupAuthCache(ctx, groupID)
 	return nil
 }
 
@@ -1102,7 +1139,7 @@ func (s *UserResourceService) ClearGroupRPMOverrides(ctx context.Context, ownerI
 	if err := s.userGroupRateRepo.ClearGroupRPMOverrides(ctx, groupID); err != nil {
 		return err
 	}
-	s.invalidateGroup(ctx, groupID)
+	s.invalidateGroupAuthCache(ctx, groupID)
 	return nil
 }
 
@@ -1153,10 +1190,13 @@ func (s *UserResourceService) CreateGroup(ctx context.Context, ownerID int64, pa
 			return nil, err
 		}
 	}
+	if err := enqueueGroupChangesWith(ctx, tx, []int64{id}); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	s.invalidateGroup(ctx, id)
+	s.invalidateGroupAuthCache(ctx, id)
 	return s.GetGroup(ctx, ownerID, id)
 }
 
@@ -1187,10 +1227,13 @@ func (s *UserResourceService) UpdateGroup(ctx context.Context, ownerID, groupID 
 			return nil, err
 		}
 	}
+	if err := enqueueGroupChangesWith(ctx, tx, []int64{groupID}); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	s.invalidateGroup(ctx, groupID)
+	s.invalidateGroupAuthCache(ctx, groupID)
 	return s.GetGroup(ctx, ownerID, groupID)
 }
 
@@ -1218,9 +1261,9 @@ WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL`, groupID, ownerID)
 	}
 	rows, err := tx.QueryContext(ctx, `
 UPDATE user_subscriptions
-SET deleted_at = NOW(), updated_at = NOW()
+SET deleted_at = NOW(), revoked_by_user_id = $2, updated_at = NOW()
 WHERE group_id = $1 AND deleted_at IS NULL
-RETURNING user_id`, groupID)
+RETURNING user_id`, groupID, ownerID)
 	if err != nil {
 		return fmt.Errorf("revoke group subscriptions: %w", err)
 	}
@@ -1240,13 +1283,18 @@ RETURNING user_id`, groupID)
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("close revoked subscription users: %w", err)
 	}
+	if err := enqueueGroupChangesWith(ctx, tx, []int64{groupID}); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
 
-	s.invalidateGroup(ctx, groupID)
+	s.invalidateGroupAuthCache(ctx, groupID)
 	for userID := range affectedUsers {
-		s.invalidateSubscription(userID, groupID)
+		if err := s.invalidateSubscription(ctx, userID, groupID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -1328,6 +1376,103 @@ LIMIT 1`, accountID, ownerID)
 	return items[0], nil
 }
 
+// SyncAccountUpstreamModels loads a complete account through the shared account
+// repository only after proving that the authenticated user owns it.
+func (s *UserResourceService) SyncAccountUpstreamModels(ctx context.Context, ownerID, accountID int64) ([]string, error) {
+	if err := s.ensureOwned(ctx, "accounts", ownerID, accountID); err != nil {
+		return nil, err
+	}
+	if s.accountTestService == nil || s.accountTestService.accountRepo == nil {
+		return nil, infraerrors.ServiceUnavailable("USER_MODEL_SYNC_UNAVAILABLE", "upstream model sync is unavailable")
+	}
+
+	account, err := s.accountTestService.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		if errors.Is(err, ErrAccountNotFound) {
+			return nil, ErrUserResourceNotFound
+		}
+		return nil, err
+	}
+	if account == nil || account.OwnerUserID == nil || *account.OwnerUserID != ownerID {
+		return nil, ErrUserResourceNotFound
+	}
+
+	return s.accountTestService.FetchUpstreamSupportedModels(ctx, account)
+}
+
+// SyncAccountUpstreamModelsPreview probes temporary API-key credentials without
+// persisting them. The owner marker enables socket-level public-network policy.
+func (s *UserResourceService) SyncAccountUpstreamModelsPreview(ctx context.Context, ownerID int64, input UserUpstreamModelsPreviewInput) ([]string, error) {
+	if ownerID <= 0 {
+		return nil, ErrUserResourceForbidden
+	}
+	if s.accountTestService == nil {
+		return nil, infraerrors.ServiceUnavailable("USER_MODEL_SYNC_UNAVAILABLE", "upstream model sync is unavailable")
+	}
+
+	platform := strings.ToLower(strings.TrimSpace(input.Platform))
+	switch platform {
+	case PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformAntigravity, PlatformGrok:
+	default:
+		return nil, infraerrors.BadRequest("USER_MODEL_SYNC_PLATFORM_INVALID", "platform does not support upstream model sync")
+	}
+
+	accountType := normalizeUserAccountType(input.Type)
+	if accountType != AccountTypeAPIKey {
+		return nil, infraerrors.BadRequest("USER_MODEL_SYNC_TYPE_INVALID", "temporary model sync only supports API key accounts")
+	}
+
+	apiKey := strings.TrimSpace(input.APIKey)
+	if apiKey == "" || len(apiKey) > 64*1024 {
+		return nil, infraerrors.BadRequest("USER_MODEL_SYNC_API_KEY_INVALID", "api_key is required and must not exceed 64 KiB")
+	}
+	baseURL := strings.TrimSpace(input.BaseURL)
+	if len(baseURL) > 2048 {
+		return nil, infraerrors.BadRequest("USER_MODEL_SYNC_BASE_URL_INVALID", "base_url must not exceed 2048 bytes")
+	}
+
+	credentials := map[string]any{"api_key": apiKey}
+	if baseURL != "" {
+		credentials["base_url"] = baseURL
+		if err := validateUserOwnedAccountURLs(ctx, map[string]any{"credentials": credentials}); err != nil {
+			return nil, err
+		}
+	}
+
+	owner := ownerID
+	temporaryAccount := &Account{
+		OwnerUserID: &owner,
+		Platform:    platform,
+		Type:        accountType,
+		Credentials: credentials,
+		Extra:       map[string]any{},
+		Concurrency: 1,
+	}
+	return s.accountTestService.FetchUpstreamSupportedModels(ctx, temporaryAccount)
+}
+
+func (s *UserResourceService) GetGeminiOAuthCapabilities() (*GeminiOAuthCapabilities, error) {
+	if s == nil || s.geminiOAuthService == nil {
+		return nil, infraerrors.ServiceUnavailable("USER_GEMINI_CAPABILITIES_UNAVAILABLE", "Gemini OAuth capabilities are unavailable")
+	}
+	capabilities := s.geminiOAuthService.GetOAuthConfig()
+	if capabilities == nil {
+		return nil, infraerrors.ServiceUnavailable("USER_GEMINI_CAPABILITIES_UNAVAILABLE", "Gemini OAuth capabilities are unavailable")
+	}
+	return &GeminiOAuthCapabilities{
+		AIStudioOAuthEnabled: capabilities.AIStudioOAuthEnabled,
+		RequiredRedirectURIs: append([]string(nil), capabilities.RequiredRedirectURIs...),
+	}, nil
+}
+
+func (s *UserResourceService) GetAntigravityDefaultModelMapping() map[string]string {
+	mapping := make(map[string]string, len(domain.DefaultAntigravityModelMapping))
+	for from, to := range domain.DefaultAntigravityModelMapping {
+		mapping[from] = to
+	}
+	return mapping
+}
+
 func (s *UserResourceService) CreateAccount(ctx context.Context, ownerID int64, payload map[string]any) (map[string]any, error) {
 	if err := s.ensureDB(); err != nil {
 		return nil, err
@@ -1364,11 +1509,24 @@ func (s *UserResourceService) CreateAccount(ctx context.Context, ownerID int64, 
 	if err := replaceAccountGroupsWith(ctx, tx, id, groupIDs); err != nil {
 		return nil, err
 	}
+	groupIDs = uniquePositiveInt64s(groupIDs)
+	if err := enqueueAccountChangeWith(ctx, tx, id, groupIDs); err != nil {
+		return nil, err
+	}
+	if err := enqueueGroupChangesWith(ctx, tx, groupIDs); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	s.invalidateAccount(ctx, id)
-	return s.GetAccount(ctx, ownerID, id)
+	for _, groupID := range groupIDs {
+		s.invalidateGroupAuthCache(ctx, groupID)
+	}
+	item, err := s.GetAccount(ctx, ownerID, id)
+	if err == nil {
+		s.scheduleOpenAIResponsesProbe(item)
+	}
+	return item, err
 }
 
 func (s *UserResourceService) UpdateAccount(ctx context.Context, ownerID, accountID int64, payload map[string]any) (map[string]any, error) {
@@ -1380,15 +1538,23 @@ func (s *UserResourceService) UpdateAccount(ctx context.Context, ownerID, accoun
 		return nil, err
 	}
 	payload = clonePayload(payload)
-	if err := s.normalizeAndValidateAccountPayload(ctx, ownerID, existing, payload); err != nil {
-		return nil, err
-	}
+	_, credentialsChanged := payload["credentials"]
+	_, proxyChanged := payload["proxy_id"]
 	if incoming, ok := payload["credentials"].(map[string]any); ok {
 		existingCredentials, _ := existing["credentials"].(map[string]any)
 		payload["credentials"] = MergePreservingSensitiveCreds(existingCredentials, incoming)
 	}
+	if err := s.normalizeAndValidateAccountPayload(ctx, ownerID, existing, payload); err != nil {
+		return nil, err
+	}
+	oldGroupIDs := urParseInt64Slice(existing["group_ids"])
 	groupIDsRaw, hasGroupIDs := payload["group_ids"]
 	delete(payload, "group_ids")
+	affectedGroupIDs := append([]int64{}, oldGroupIDs...)
+	if hasGroupIDs {
+		affectedGroupIDs = append(affectedGroupIDs, urParseInt64Slice(groupIDsRaw)...)
+	}
+	affectedGroupIDs = uniquePositiveInt64s(affectedGroupIDs)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -1403,11 +1569,23 @@ func (s *UserResourceService) UpdateAccount(ctx context.Context, ownerID, accoun
 			return nil, err
 		}
 	}
+	if err := enqueueAccountChangeWith(ctx, tx, accountID, affectedGroupIDs); err != nil {
+		return nil, err
+	}
+	if err := enqueueGroupChangesWith(ctx, tx, affectedGroupIDs); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	s.invalidateAccount(ctx, accountID)
-	return s.GetAccount(ctx, ownerID, accountID)
+	for _, groupID := range affectedGroupIDs {
+		s.invalidateGroupAuthCache(ctx, groupID)
+	}
+	item, err := s.GetAccount(ctx, ownerID, accountID)
+	if err == nil && (credentialsChanged || proxyChanged) {
+		s.scheduleOpenAIResponsesProbe(item)
+	}
+	return item, err
 }
 
 func (s *UserResourceService) DeleteAccount(ctx context.Context, ownerID, accountID int64) error {
@@ -1431,6 +1609,7 @@ func (s *UserResourceService) DeleteAccount(ctx context.Context, ownerID, accoun
 			_ = rows.Close()
 			return err
 		}
+		groupIDs = append(groupIDs, id)
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
@@ -1454,43 +1633,69 @@ WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL`, accountID, ownerID
 	if _, err := tx.ExecContext(ctx, "DELETE FROM scheduled_test_plans WHERE account_id = $1", accountID); err != nil {
 		return err
 	}
+	groupIDs = uniquePositiveInt64s(groupIDs)
+	if err := enqueueAccountChangeWith(ctx, tx, accountID, groupIDs); err != nil {
+		return err
+	}
+	if err := enqueueGroupChangesWith(ctx, tx, groupIDs); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
-	s.invalidateAccount(ctx, accountID)
 	for _, gid := range groupIDs {
-		s.invalidateGroup(ctx, gid)
+		s.invalidateGroupAuthCache(ctx, gid)
 	}
 	return nil
 }
 
 func (s *UserResourceService) ClearAccountError(ctx context.Context, ownerID, accountID int64) (map[string]any, error) {
-	if err := s.ensureOwned(ctx, "accounts", ownerID, accountID); err != nil {
+	if err := s.ensureDB(); err != nil {
 		return nil, err
 	}
-	res, err := s.db.ExecContext(ctx, "UPDATE accounts SET error_message = NULL, status = 'active', schedulable = true, updated_at = NOW() WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL", accountID, ownerID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, "UPDATE accounts SET error_message = NULL, status = 'active', schedulable = true, updated_at = NOW() WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL", accountID, ownerID)
 	if err != nil {
 		return nil, err
 	}
 	if affected(res) == 0 {
 		return nil, ErrUserResourceNotFound
 	}
-	s.invalidateAccount(ctx, accountID)
+	if err := enqueueAccountChangeWith(ctx, tx, accountID, nil); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
 	return s.GetAccount(ctx, ownerID, accountID)
 }
 
 func (s *UserResourceService) SetAccountSchedulable(ctx context.Context, ownerID, accountID int64, schedulable bool) (map[string]any, error) {
-	if err := s.ensureOwned(ctx, "accounts", ownerID, accountID); err != nil {
+	if err := s.ensureDB(); err != nil {
 		return nil, err
 	}
-	res, err := s.db.ExecContext(ctx, "UPDATE accounts SET schedulable = $1, updated_at = NOW() WHERE id = $2 AND owner_user_id = $3 AND deleted_at IS NULL", schedulable, accountID, ownerID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, "UPDATE accounts SET schedulable = $1, updated_at = NOW() WHERE id = $2 AND owner_user_id = $3 AND deleted_at IS NULL", schedulable, accountID, ownerID)
 	if err != nil {
 		return nil, err
 	}
 	if affected(res) == 0 {
 		return nil, ErrUserResourceNotFound
 	}
-	s.invalidateAccount(ctx, accountID)
+	if err := enqueueAccountChangeWith(ctx, tx, accountID, nil); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
 	return s.GetAccount(ctx, ownerID, accountID)
 }
 
@@ -1624,11 +1829,14 @@ func (s *UserResourceService) BatchUpdateAccounts(ctx context.Context, ownerID i
 		return nil, err
 	}
 	fields = clonePayload(fields)
+	_, credentialsChanged := fields["credentials"]
+	_, proxyChanged := fields["proxy_id"]
 	delete(fields, "id")
 	delete(fields, "owner_user_id")
 	type accountBatchUpdate struct {
 		id          int64
 		fields      map[string]any
+		oldGroupIDs []int64
 		groupIDs    []int64
 		hasGroupIDs bool
 	}
@@ -1639,6 +1847,10 @@ func (s *UserResourceService) BatchUpdateAccounts(ctx context.Context, ownerID i
 			return nil, err
 		}
 		normalized := clonePayload(fields)
+		if incoming, ok := normalized["credentials"].(map[string]any); ok {
+			existingCredentials, _ := existing["credentials"].(map[string]any)
+			normalized["credentials"] = MergePreservingSensitiveCreds(existingCredentials, incoming)
+		}
 		if err := s.normalizeAndValidateAccountPayload(ctx, ownerID, existing, normalized); err != nil {
 			return nil, err
 		}
@@ -1647,6 +1859,7 @@ func (s *UserResourceService) BatchUpdateAccounts(ctx context.Context, ownerID i
 		updates = append(updates, accountBatchUpdate{
 			id:          id,
 			fields:      normalized,
+			oldGroupIDs: urParseInt64Slice(existing["group_ids"]),
 			groupIDs:    urParseInt64Slice(groupIDsRaw),
 			hasGroupIDs: hasGroupIDs,
 		})
@@ -1667,11 +1880,32 @@ func (s *UserResourceService) BatchUpdateAccounts(ctx context.Context, ownerID i
 			}
 		}
 	}
+	affectedGroupIDs := make([]int64, 0)
+	for _, update := range updates {
+		affectedGroupIDs = append(affectedGroupIDs, update.oldGroupIDs...)
+		if update.hasGroupIDs {
+			affectedGroupIDs = append(affectedGroupIDs, update.groupIDs...)
+		}
+	}
+	affectedGroupIDs = uniquePositiveInt64s(affectedGroupIDs)
+	if err := enqueueAccountBulkChangeWith(ctx, tx, ids, affectedGroupIDs); err != nil {
+		return nil, err
+	}
+	if err := enqueueGroupChangesWith(ctx, tx, affectedGroupIDs); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	for _, groupID := range affectedGroupIDs {
+		s.invalidateGroupAuthCache(ctx, groupID)
+	}
 	for _, update := range updates {
-		s.invalidateAccount(ctx, update.id)
+		if credentialsChanged || proxyChanged {
+			if item, err := s.GetAccount(ctx, ownerID, update.id); err == nil {
+				s.scheduleOpenAIResponsesProbe(item)
+			}
+		}
 	}
 	return map[string]any{"updated": len(updates)}, nil
 }
@@ -1742,7 +1976,6 @@ func (s *UserResourceService) RefreshAccount(ctx context.Context, ownerID, accou
 				return nil, err
 			}
 		} else {
-			s.invalidateAccount(ctx, accountID)
 			item, err := s.GetAccount(ctx, ownerID, accountID)
 			if err != nil {
 				return nil, err
@@ -1752,7 +1985,12 @@ func (s *UserResourceService) RefreshAccount(ctx context.Context, ownerID, accou
 			return item, nil
 		}
 	}
-	_, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, `
 UPDATE accounts
 SET error_message = NULL,
     status = CASE WHEN status = 'error' THEN 'active' ELSE status END,
@@ -1765,7 +2003,15 @@ WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL`, accountID, ownerID
 	if err != nil {
 		return nil, err
 	}
-	s.invalidateAccount(ctx, accountID)
+	if affected(res) == 0 {
+		return nil, ErrUserResourceNotFound
+	}
+	if err := enqueueAccountChangeWith(ctx, tx, accountID, nil); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
 	item, err := s.GetAccount(ctx, ownerID, accountID)
 	if err != nil {
 		return nil, err
@@ -1930,13 +2176,59 @@ func (s *UserResourceService) updateProxy(ctx context.Context, ownerID, proxyID 
 	if err := s.normalizeAndValidateProxyPayload(ctx, ownerID, proxyID, existing, payload); err != nil {
 		return nil, err
 	}
-	if err := DefaultXrayRuntimeManager().Stop(proxyID); err != nil {
-		return nil, fmt.Errorf("stop previous xray runtime: %w", err)
+	if err := stopProxyRuntimesWithRetry(proxyID); err != nil {
+		return nil, fmt.Errorf("stop previous proxy runtime: %w", err)
 	}
-	if err := DefaultSingBoxRuntimeManager().Stop(proxyID); err != nil {
-		return nil, fmt.Errorf("stop previous sing-box runtime: %w", err)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
 	}
-	if err := s.updateOwned(ctx, "proxies", ownerID, proxyID, proxyWritableColumns, payload); err != nil {
+	defer func() { _ = tx.Rollback() }()
+	if err := s.updateOwnedWith(ctx, tx, "proxies", ownerID, proxyID, proxyWritableColumns, payload); err != nil {
+		return nil, err
+	}
+	rows, err := tx.QueryContext(ctx, `
+UPDATE accounts
+SET extra = COALESCE(extra, '{}'::jsonb) - 'upstream_billing_probe', updated_at = NOW()
+WHERE deleted_at IS NULL
+  AND (
+    proxy_id = $1
+    OR proxy_id IN (
+      SELECT id FROM proxies WHERE backup_proxy_id = $1 AND deleted_at IS NULL
+    )
+  )
+RETURNING id`, proxyID)
+	if err != nil {
+		return nil, err
+	}
+	accountIDs := make([]int64, 0)
+	for rows.Next() {
+		var accountID int64
+		if err := rows.Scan(&accountID); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		accountIDs = append(accountIDs, accountID)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if len(accountIDs) > 0 {
+		payloadJSON, err := json.Marshal(map[string]any{"account_ids": accountIDs})
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload, created_at)
+VALUES ($1, NULL, NULL, $2::jsonb, NOW())`, SchedulerOutboxEventAccountBulkChanged, payloadJSON); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return s.GetProxy(ctx, ownerID, proxyID)
@@ -1953,11 +2245,14 @@ func (s *UserResourceService) DeleteProxy(ctx context.Context, ownerID, proxyID 
 	if count > 0 {
 		return infraerrors.Conflict("PROXY_IN_USE", "proxy is used by accounts")
 	}
-	if err := DefaultXrayRuntimeManager().Stop(proxyID); err != nil {
-		return fmt.Errorf("stop xray runtime before delete: %w", err)
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM proxies WHERE backup_proxy_id = $1 AND deleted_at IS NULL", proxyID).Scan(&count); err != nil {
+		return err
 	}
-	if err := DefaultSingBoxRuntimeManager().Stop(proxyID); err != nil {
-		return fmt.Errorf("stop sing-box runtime before delete: %w", err)
+	if count > 0 {
+		return infraerrors.Conflict("PROXY_IN_USE", "proxy is used as a fallback by other proxies")
+	}
+	if err := stopProxyRuntimesWithRetry(proxyID); err != nil {
+		return fmt.Errorf("stop proxy runtime before delete: %w", err)
 	}
 	res, err := s.db.ExecContext(ctx, "UPDATE proxies SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL", proxyID, ownerID)
 	if err != nil {
@@ -2527,7 +2822,12 @@ func (s *UserResourceService) DeleteProxySource(ctx context.Context, ownerID, so
 	if err := s.ensureDB(); err != nil {
 		return err
 	}
-	res, err := s.db.ExecContext(ctx, `
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, `
 UPDATE proxy_sources SET deleted_at = NOW(), updated_at = NOW()
 WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL`, sourceID, ownerID)
 	if err != nil {
@@ -2535,6 +2835,26 @@ WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL`, sourceID, ownerID)
 	}
 	if affected(res) == 0 {
 		return ErrUserResourceNotFound
+	}
+	staleIDs, accountIDs, err := s.disableMissingProxySourceNodesWith(ctx, tx, ownerID, sourceID, nil)
+	if err != nil {
+		return err
+	}
+	if err := enqueueProxyDependentChangesWith(ctx, tx, accountIDs); err != nil {
+		return err
+	}
+	for _, proxyID := range staleIDs {
+		if err := stopProxyRuntimesWithRetry(proxyID); err != nil {
+			return fmt.Errorf("stop proxy source runtime before delete: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	for _, proxyID := range staleIDs {
+		if err := stopProxyRuntimesWithRetry(proxyID); err != nil {
+			slog.Error("user proxy source runtime cleanup failed", "owner_user_id", ownerID, "source_id", sourceID, "proxy_id", proxyID, "error", err)
+		}
 	}
 	return nil
 }
@@ -2547,37 +2867,19 @@ func (s *UserResourceService) SyncProxySource(ctx context.Context, ownerID, sour
 	subscriptionURL := urAsString(source["subscription_url"])
 	content, err := fetchProxySubscription(ctx, subscriptionURL)
 	if err != nil {
-		_, _ = s.db.ExecContext(ctx, `
-UPDATE proxy_sources
-SET last_synced_at = NOW(), last_sync_status = 'error', last_sync_error = $1, updated_at = NOW()
-WHERE id = $2 AND owner_user_id = $3`, safeSyncError(err), sourceID, ownerID)
+		if statusErr := s.recordProxySourceSyncError(ctx, ownerID, sourceID, err); statusErr != nil {
+			return nil, errors.Join(err, fmt.Errorf("record proxy source sync failure: %w", statusErr))
+		}
 		return nil, err
 	}
 	imported, err := s.syncProxySourceNodes(ctx, ownerID, sourceID, urAsString(source["name"]), content, toBool(source["is_public"]))
 	if err != nil {
-		_, _ = s.db.ExecContext(ctx, `
-UPDATE proxy_sources
-SET last_synced_at = NOW(), last_sync_status = 'error', last_sync_error = $1, updated_at = NOW()
-WHERE id = $2 AND owner_user_id = $3`, safeSyncError(err), sourceID, ownerID)
+		if statusErr := s.recordProxySourceSyncError(ctx, ownerID, sourceID, err); statusErr != nil {
+			return nil, errors.Join(err, fmt.Errorf("record proxy source sync failure: %w", statusErr))
+		}
 		return nil, err
 	}
-	status := "success"
-	if len(imported.Errors) > 0 {
-		status = "partial"
-	}
-	importedCount := len(imported.Created) + len(imported.Updated)
-	if importedCount == 0 && len(imported.Errors) > 0 {
-		status = "error"
-	}
-	errorText := ""
-	if len(imported.Errors) > 0 {
-		errorText = strings.Join(imported.Errors, "\n")
-	}
-	_, _ = s.db.ExecContext(ctx, `
-UPDATE proxy_sources
-SET last_synced_at = NOW(), last_sync_status = $1, last_sync_error = $2,
-    last_imported_count = $3, updated_at = NOW()
-WHERE id = $4 AND owner_user_id = $5`, status, errorText, importedCount, sourceID, ownerID)
+	status, importedCount, _ := proxySourceSyncSummary(imported)
 	s.enqueueImportedProxyQualityChecks(ownerID, proxyIDsFromResourceItems(imported.Created))
 	return &ProxySourceSyncResult{
 		SourceID:      sourceID,
@@ -2597,6 +2899,15 @@ func (s *UserResourceService) syncProxySourceNodes(ctx context.Context, ownerID,
 		return nil, infraerrors.BadRequest("USER_RESOURCE_BATCH_TOO_LARGE", "proxy imports cannot exceed 1000 nodes")
 	}
 	result := &ProxyImportResult{Created: []map[string]any{}, Updated: []map[string]any{}, Errors: []string{}}
+	existingByKey, err := proxySourceNodesByKey(ctx, s.db, ownerID, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	type preparedNode struct {
+		key     string
+		payload map[string]any
+	}
+	prepared := make([]preparedNode, 0, len(nodes))
 	seenKeys := make([]string, 0, len(nodes))
 	keyOccurrences := make(map[string]int, len(nodes))
 	for index, node := range nodes {
@@ -2624,47 +2935,192 @@ func (s *UserResourceService) syncProxySourceNodes(ctx context.Context, ownerID,
 				"source_id": sourceID, "source_node_key": nodeKey,
 			},
 		}
-
-		var proxyID int64
-		err := s.db.QueryRowContext(ctx, `
-SELECT id FROM proxies
-WHERE owner_user_id = $1 AND deleted_at IS NULL
-  AND extra->>'source_id' = $2 AND extra->>'source_node_key' = $3
-LIMIT 1`, ownerID, strconv.FormatInt(sourceID, 10), nodeKey).Scan(&proxyID)
-		switch {
-		case err == nil:
-			item, updateErr := s.updateProxy(ctx, ownerID, proxyID, payload, true)
-			if updateErr != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("%s: update failed", name))
-				continue
-			}
-			result.Updated = append(result.Updated, item)
-		case err == sql.ErrNoRows:
-			item, createErr := s.createProxy(ctx, ownerID, payload, true)
-			if createErr != nil {
-				result.Errors = append(result.Errors, fmt.Sprintf("%s: create failed", name))
-				continue
-			}
-			result.Created = append(result.Created, item)
-		default:
-			return nil, err
+		existing := existingByKey[nodeKey]
+		proxyID := urToInt64(existing["id"])
+		if existing == nil {
+			defaultPayload(payload, map[string]any{
+				"fallback_mode":    FallbackModeNone,
+				"expiry_warn_days": 7,
+			})
+		}
+		if err := s.normalizeAndValidateProxyPayload(ctx, ownerID, proxyID, existing, payload); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("entry %d: validation failed", index+1))
+			continue
+		}
+		prepared = append(prepared, preparedNode{key: nodeKey, payload: payload})
+	}
+	// A non-empty response where every entry failed to parse is not authoritative;
+	// preserve the last known-good nodes so a format regression cannot drop a pool.
+	authoritative := !(len(nodes) > 0 && len(seenKeys) == 0 && len(result.Errors) > 0)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var lockedSourceID int64
+	if err := tx.QueryRowContext(ctx, `
+SELECT id FROM proxy_sources
+WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL
+FOR UPDATE`, sourceID, ownerID).Scan(&lockedSourceID); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, ErrUserResourceNotFound
+		}
+		return nil, err
+	}
+	currentByKey, err := proxySourceNodesByKey(ctx, tx, ownerID, sourceID)
+	if err != nil {
+		return nil, err
+	}
+	newCount := 0
+	for _, candidate := range prepared {
+		if currentByKey[candidate.key] == nil {
+			newCount++
 		}
 	}
-	if len(seenKeys) > 0 {
-		staleIDs, err := s.disableMissingProxySourceNodes(ctx, ownerID, sourceID, seenKeys)
+	if newCount > 0 {
+		var ownedCount int
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM proxies WHERE owner_user_id = $1 AND deleted_at IS NULL", ownerID).Scan(&ownedCount); err != nil {
+			return nil, err
+		}
+		if ownedCount+newCount > userResourceMaxProxies {
+			return nil, infraerrors.Newf(http.StatusTooManyRequests, "USER_RESOURCE_LIMIT_REACHED", "proxies limit of %d reached", userResourceMaxProxies)
+		}
+	}
+	updatedRuntimeIDs := make([]int64, 0, len(prepared))
+	for _, candidate := range prepared {
+		payload := clonePayload(candidate.payload)
+		if current := currentByKey[candidate.key]; current != nil {
+			proxyID := urToInt64(current["id"])
+			if err := s.updateOwnedWith(ctx, tx, "proxies", ownerID, proxyID, proxyWritableColumns, payload); err != nil {
+				return nil, err
+			}
+			updatedRuntimeIDs = append(updatedRuntimeIDs, proxyID)
+			result.Updated = append(result.Updated, proxySourceMutationItem(proxyID, ownerID, payload))
+			continue
+		}
+		defaultPayload(payload, map[string]any{
+			"fallback_mode":    FallbackModeNone,
+			"expiry_warn_days": 7,
+			"extra":            map[string]any{},
+		})
+		proxyID, err := s.insertOwnedWith(ctx, tx, "proxies", ownerID, proxyWritableColumns, payload, []string{"name", "protocol", "host", "port"})
 		if err != nil {
 			return nil, err
 		}
-		for _, proxyID := range staleIDs {
-			_ = DefaultXrayRuntimeManager().Stop(proxyID)
-			_ = DefaultSingBoxRuntimeManager().Stop(proxyID)
+		result.Created = append(result.Created, proxySourceMutationItem(proxyID, ownerID, payload))
+	}
+	staleIDs := []int64{}
+	accountIDs := []int64{}
+	if authoritative {
+		staleIDs, accountIDs, err = s.disableMissingProxySourceNodesWith(ctx, tx, ownerID, sourceID, seenKeys)
+		if err != nil {
+			return nil, err
+		}
+	}
+	updatedAccountIDs, err := clearProxyDependentProbeWith(ctx, tx, updatedRuntimeIDs)
+	if err != nil {
+		return nil, err
+	}
+	accountIDs = append(accountIDs, updatedAccountIDs...)
+	if err := enqueueProxyDependentChangesWith(ctx, tx, accountIDs); err != nil {
+		return nil, err
+	}
+	status, importedCount, errorText := proxySourceSyncSummary(result)
+	res, err := tx.ExecContext(ctx, `
+UPDATE proxy_sources
+SET last_synced_at = NOW(), last_sync_status = $1, last_sync_error = $2,
+    last_imported_count = $3, updated_at = NOW()
+WHERE id = $4 AND owner_user_id = $5 AND deleted_at IS NULL`, status, errorText, importedCount, sourceID, ownerID)
+	if err != nil {
+		return nil, err
+	}
+	if affected(res) == 0 {
+		return nil, ErrUserResourceNotFound
+	}
+	runtimeIDs := uniquePositiveInt64s(append(updatedRuntimeIDs, staleIDs...))
+	for _, proxyID := range runtimeIDs {
+		if err := stopProxyRuntimesWithRetry(proxyID); err != nil {
+			return nil, fmt.Errorf("stop proxy source runtime before sync: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	for _, proxyID := range runtimeIDs {
+		if err := stopProxyRuntimesWithRetry(proxyID); err != nil {
+			slog.Error("user proxy source runtime cleanup failed after sync", "owner_user_id", ownerID, "source_id", sourceID, "proxy_id", proxyID, "error", err)
 		}
 	}
 	return result, nil
 }
 
-func (s *UserResourceService) disableMissingProxySourceNodes(ctx context.Context, ownerID, sourceID int64, activeKeys []string) ([]int64, error) {
-	rows, err := s.db.QueryContext(ctx, `
+func proxySourceNodesByKey(ctx context.Context, db userResourceDBTX, ownerID, sourceID int64) (map[string]map[string]any, error) {
+	rows, err := db.QueryContext(ctx, `
+SELECT id, owner_user_id, is_public, kind, name, protocol, host, port,
+       username, password, status, expires_at, fallback_mode, backup_proxy_id,
+       expiry_warn_days, COALESCE(extra, '{}'::jsonb)::text AS extra
+FROM proxies
+WHERE owner_user_id = $1 AND deleted_at IS NULL AND extra->>'source_id' = $2`, ownerID, strconv.FormatInt(sourceID, 10))
+	if err != nil {
+		return nil, err
+	}
+	items, err := scanRowsToMaps(rows)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string]map[string]any, len(items))
+	for _, item := range items {
+		extra, _ := item["extra"].(map[string]any)
+		if key := urAsString(extra["source_node_key"]); key != "" {
+			result[key] = item
+		}
+	}
+	return result, nil
+}
+
+func proxySourceMutationItem(proxyID, ownerID int64, payload map[string]any) map[string]any {
+	item := clonePayload(payload)
+	item["id"] = proxyID
+	item["owner_user_id"] = ownerID
+	item["has_auth"] = urAsString(payload["username"]) != "" || urAsString(payload["password"]) != ""
+	return item
+}
+
+func proxySourceSyncSummary(result *ProxyImportResult) (string, int, string) {
+	if result == nil {
+		return "error", 0, "proxy source sync returned no result"
+	}
+	status := "success"
+	if len(result.Errors) > 0 {
+		status = "partial"
+	}
+	importedCount := len(result.Created) + len(result.Updated)
+	if importedCount == 0 && len(result.Errors) > 0 {
+		status = "error"
+	}
+	errorText := strings.Join(result.Errors, "\n")
+	if len(errorText) > 64*1024 {
+		errorText = errorText[:64*1024]
+	}
+	return status, importedCount, errorText
+}
+
+func (s *UserResourceService) recordProxySourceSyncError(ctx context.Context, ownerID, sourceID int64, syncErr error) error {
+	res, err := s.db.ExecContext(ctx, `
+UPDATE proxy_sources
+SET last_synced_at = NOW(), last_sync_status = 'error', last_sync_error = $1, updated_at = NOW()
+WHERE id = $2 AND owner_user_id = $3 AND deleted_at IS NULL`, safeSyncError(syncErr), sourceID, ownerID)
+	if err != nil {
+		return err
+	}
+	if affected(res) == 0 {
+		return ErrUserResourceNotFound
+	}
+	return nil
+}
+
+func (s *UserResourceService) disableMissingProxySourceNodesWith(ctx context.Context, db userResourceDBTX, ownerID, sourceID int64, activeKeys []string) ([]int64, []int64, error) {
+	rows, err := db.QueryContext(ctx, `
 UPDATE proxies
 SET status = 'disabled', updated_at = NOW()
 WHERE owner_user_id = $1 AND deleted_at IS NULL AND status <> 'disabled'
@@ -2672,18 +3128,71 @@ WHERE owner_user_id = $1 AND deleted_at IS NULL AND status <> 'disabled'
   AND NOT (extra->>'source_node_key' = ANY($3))
 RETURNING id`, ownerID, strconv.FormatInt(sourceID, 10), pq.Array(activeKeys))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() { _ = rows.Close() }()
 	ids := make([]int64, 0)
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		ids = append(ids, id)
 	}
-	return ids, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	accountIDs, err := clearProxyDependentProbeWith(ctx, db, ids)
+	if err != nil {
+		return nil, nil, err
+	}
+	return ids, accountIDs, nil
+}
+
+func clearProxyDependentProbeWith(ctx context.Context, db userResourceDBTX, proxyIDs []int64) ([]int64, error) {
+	proxyIDs = uniquePositiveInt64s(proxyIDs)
+	if len(proxyIDs) == 0 {
+		return nil, nil
+	}
+	accountRows, err := db.QueryContext(ctx, `
+UPDATE accounts
+SET extra = COALESCE(extra, '{}'::jsonb) - 'upstream_billing_probe', updated_at = NOW()
+WHERE deleted_at IS NULL
+  AND (
+    proxy_id = ANY($1)
+    OR proxy_id IN (
+      SELECT id FROM proxies WHERE backup_proxy_id = ANY($1) AND deleted_at IS NULL
+    )
+  )
+	RETURNING id`, pq.Array(proxyIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = accountRows.Close() }()
+	accountIDs := make([]int64, 0)
+	for accountRows.Next() {
+		var id int64
+		if err := accountRows.Scan(&id); err != nil {
+			return nil, err
+		}
+		accountIDs = append(accountIDs, id)
+	}
+	return accountIDs, accountRows.Err()
+}
+
+func enqueueProxyDependentChangesWith(ctx context.Context, db userResourceDBTX, accountIDs []int64) error {
+	accountIDs = uniquePositiveInt64s(accountIDs)
+	if len(accountIDs) == 0 {
+		return nil
+	}
+	payload, err := json.Marshal(map[string]any{"account_ids": accountIDs})
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `
+INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload, created_at)
+VALUES ($1, NULL, NULL, $2::jsonb, NOW())`, SchedulerOutboxEventAccountBulkChanged, payload)
+	return err
 }
 
 func (s *UserResourceService) ListRedeemCodes(ctx context.Context, ownerID int64, opts UserResourceListOptions) (*UserResourcePage, error) {
@@ -2809,6 +3318,9 @@ func (s *UserResourceService) GenerateRedeemCodes(ctx context.Context, ownerID i
 		}
 	}
 	notes := urAsString(payload["notes"])
+	if err := validateUserResourceNotes(notes); err != nil {
+		return nil, err
+	}
 	expiresAt, _ := coerceTime(payload["expires_at"])
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -2964,6 +3476,9 @@ func (s *UserResourceService) BatchUpdateRedeemCodes(ctx context.Context, ownerI
 	if len(ids) == 0 {
 		return nil, infraerrors.BadRequest("REDEEM_IDS_REQUIRED", "ids are required")
 	}
+	if len(ids) > userResourceBatchMaxItems {
+		return nil, infraerrors.BadRequest("USER_RESOURCE_BATCH_TOO_LARGE", "batch updates cannot exceed 1000 redeem codes")
+	}
 	fields = clonePayload(fields)
 	delete(fields, "type")
 	delete(fields, "value")
@@ -2987,7 +3502,11 @@ func (s *UserResourceService) BatchUpdateRedeemCodes(ctx context.Context, ownerI
 			args = append(args, status)
 			assignments = append(assignments, fmt.Sprintf("status = $%d", len(args)))
 		case "notes":
-			args = append(args, urAsString(fields[key]))
+			notes := urAsString(fields[key])
+			if err := validateUserResourceNotes(notes); err != nil {
+				return nil, err
+			}
+			args = append(args, notes)
 			assignments = append(assignments, fmt.Sprintf("notes = $%d", len(args)))
 		case "expires_at":
 			v, err := coerceTime(fields[key])
@@ -3070,7 +3589,7 @@ WHERE `+whereSQL, args...).Scan(&total); err != nil {
 SELECT us.id, us.user_id, u.email AS user_email, u.username AS username, us.group_id, g.name AS group_name,
        g.platform AS group_platform, us.starts_at, us.expires_at, us.status, us.daily_usage_usd::double precision AS daily_usage_usd,
        us.weekly_usage_usd::double precision AS weekly_usage_usd, us.monthly_usage_usd::double precision AS monthly_usage_usd,
-       us.assigned_by, us.managed_by_user_id, us.source_type, us.source_redeem_code_id, us.assigned_at,
+       us.assigned_by, us.managed_by_user_id, us.source_type, us.source_redeem_code_id, us.revoked_by_user_id, us.assigned_at,
        COALESCE(us.notes, '') AS notes, us.created_at, us.updated_at, us.deleted_at
 FROM user_subscriptions us
 JOIN groups g ON g.id = us.group_id
@@ -3089,6 +3608,9 @@ LIMIT `+limitArg+` OFFSET `+offsetArg, args...)
 }
 
 func (s *UserResourceService) AssignSubscription(ctx context.Context, ownerID int64, input UserSubscriptionAssignInput) (map[string]any, error) {
+	if err := validateUserResourceNotes(input.Notes); err != nil {
+		return nil, err
+	}
 	userID := input.UserID
 	var err error
 	if userID <= 0 && input.Email != "" {
@@ -3113,6 +3635,9 @@ func (s *UserResourceService) AssignSubscription(ctx context.Context, ownerID in
 func (s *UserResourceService) BulkAssignSubscription(ctx context.Context, ownerID int64, input UserSubscriptionBulkAssignInput) (*UserSubscriptionBulkAssignResult, error) {
 	if len(input.UserIDs)+len(input.Emails) > userResourceBatchMaxItems {
 		return nil, infraerrors.BadRequest("USER_RESOURCE_BATCH_TOO_LARGE", "bulk assignment cannot exceed 1000 users")
+	}
+	if err := validateUserResourceNotes(input.Notes); err != nil {
+		return nil, err
 	}
 	if err := s.validateOwnedSubscriptionGroup(ctx, ownerID, input.GroupID); err != nil {
 		return nil, err
@@ -3156,17 +3681,21 @@ func (s *UserResourceService) ExtendAssignedSubscription(ctx context.Context, ow
 	if err := s.ensureManagedSubscription(ctx, ownerID, subscriptionID); err != nil {
 		return nil, err
 	}
-	_, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, `
 UPDATE user_subscriptions
 SET expires_at = CASE WHEN expires_at > NOW() THEN expires_at ELSE NOW() END + ($1::int * INTERVAL '1 day'),
-    status = 'active', updated_at = NOW(), deleted_at = NULL
-WHERE id = $2`, days, subscriptionID)
+	status = 'active', revoked_by_user_id = NULL, updated_at = NOW(), deleted_at = NULL
+WHERE id = $2
+  AND (revoked_by_user_id IS NULL OR revoked_by_user_id IS DISTINCT FROM user_id)`, days, subscriptionID)
 	if err != nil {
 		return nil, err
 	}
+	if affected(res) == 0 {
+		return nil, ErrUserResourceForbidden
+	}
 	sub, err := s.getAssignedSubscription(ctx, ownerID, subscriptionID, true)
 	if err == nil {
-		s.invalidateSubscription(urToInt64(sub["user_id"]), urToInt64(sub["group_id"]))
+		err = s.invalidateSubscription(ctx, urToInt64(sub["user_id"]), urToInt64(sub["group_id"]))
 	}
 	return sub, err
 }
@@ -3176,29 +3705,32 @@ func (s *UserResourceService) RevokeAssignedSubscription(ctx context.Context, ow
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, "UPDATE user_subscriptions SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL", subscriptionID)
+	_, err = s.db.ExecContext(ctx, "UPDATE user_subscriptions SET deleted_at = NOW(), revoked_by_user_id = $2, updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL", subscriptionID, ownerID)
 	if err != nil {
 		return err
 	}
-	s.invalidateSubscription(urToInt64(sub["user_id"]), urToInt64(sub["group_id"]))
-	return nil
+	return s.invalidateSubscription(ctx, urToInt64(sub["user_id"]), urToInt64(sub["group_id"]))
 }
 
 func (s *UserResourceService) RestoreAssignedSubscription(ctx context.Context, ownerID, subscriptionID int64) (map[string]any, error) {
 	if err := s.ensureManagedSubscription(ctx, ownerID, subscriptionID); err != nil {
 		return nil, err
 	}
-	_, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, `
 UPDATE user_subscriptions SET deleted_at = NULL,
   status = CASE WHEN expires_at > NOW() THEN 'active' ELSE 'expired' END,
-  updated_at = NOW()
-WHERE id = $1`, subscriptionID)
+	revoked_by_user_id = NULL, updated_at = NOW()
+WHERE id = $1
+  AND (revoked_by_user_id IS NULL OR revoked_by_user_id IS DISTINCT FROM user_id)`, subscriptionID)
 	if err != nil {
 		return nil, err
 	}
+	if affected(res) == 0 {
+		return nil, ErrUserResourceForbidden
+	}
 	sub, err := s.getAssignedSubscription(ctx, ownerID, subscriptionID, true)
 	if err == nil {
-		s.invalidateSubscription(urToInt64(sub["user_id"]), urToInt64(sub["group_id"]))
+		err = s.invalidateSubscription(ctx, urToInt64(sub["user_id"]), urToInt64(sub["group_id"]))
 	}
 	return sub, err
 }
@@ -3217,7 +3749,7 @@ WHERE id = $1`, subscriptionID)
 	}
 	sub, err := s.getAssignedSubscription(ctx, ownerID, subscriptionID, true)
 	if err == nil {
-		s.invalidateSubscription(urToInt64(sub["user_id"]), urToInt64(sub["group_id"]))
+		err = s.invalidateSubscription(ctx, urToInt64(sub["user_id"]), urToInt64(sub["group_id"]))
 	}
 	return sub, err
 }
@@ -3546,7 +4078,8 @@ func (s *UserResourceService) validateOwnedSubscriptionGroup(ctx context.Context
 	err := s.db.QueryRowContext(ctx, `
 SELECT EXISTS (
   SELECT 1 FROM groups
-  WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL AND subscription_type = 'subscription'
+  WHERE id = $1 AND owner_user_id = $2 AND deleted_at IS NULL
+    AND status = 'active' AND subscription_type = 'subscription'
 )`, groupID, ownerID).Scan(&ok)
 	if err != nil {
 		return err
@@ -3681,12 +4214,27 @@ func (s *UserResourceService) updateOwnedWith(ctx context.Context, db userResour
 	query := fmt.Sprintf("UPDATE %s SET %s WHERE id = $%d AND owner_user_id = $%d AND deleted_at IS NULL", table, strings.Join(assignments, ", "), len(args)-1, len(args))
 	res, err := db.ExecContext(ctx, query, args...)
 	if err != nil {
-		return err
+		return translateUserResourceProxyConstraintError(err)
 	}
 	if affected(res) == 0 {
 		return ErrUserResourceNotFound
 	}
 	return nil
+}
+
+// translateUserResourceProxyConstraintError keeps the database trigger that
+// protects in-use public proxies authoritative while exposing a stable API
+// error to callers.
+func translateUserResourceProxyConstraintError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pgErr *pq.Error
+	if errors.As(err, &pgErr) && pgErr != nil && pgErr.Code == "23514" &&
+		strings.Contains(strings.ToLower(pgErr.Message), "public proxy is still used by another user resource") {
+		return infraerrors.Conflict("PROXY_PUBLIC_IN_USE", "public proxy is currently in use")
+	}
+	return err
 }
 
 func (s *UserResourceService) ensureOwned(ctx context.Context, table string, ownerID, id int64) error {
@@ -3789,6 +4337,9 @@ ORDER BY g.sort_order ASC, g.id ASC`, pq.Array(ids))
 }
 
 func (s *UserResourceService) assignOrExtendSubscription(ctx context.Context, managerID, userID, groupID int64, validityDays int, notes, sourceType string, sourceRedeemCodeID *int64) (map[string]any, error) {
+	if err := validateUserResourceNotes(notes); err != nil {
+		return nil, err
+	}
 	if validityDays <= 0 {
 		validityDays = 30
 	}
@@ -3804,15 +4355,34 @@ func (s *UserResourceService) assignOrExtendSubscription(ctx context.Context, ma
 	defer func() { _ = tx.Rollback() }()
 	var existingID int64
 	var existingExpires time.Time
+	var existingNotes string
+	var existingDeletedAt sql.NullTime
+	var existingRevokedBy sql.NullInt64
 	err = tx.QueryRowContext(ctx, `
-SELECT id, expires_at FROM user_subscriptions
+SELECT id, expires_at, COALESCE(notes, ''), deleted_at, revoked_by_user_id
+FROM user_subscriptions
 WHERE user_id = $1 AND group_id = $2
 ORDER BY deleted_at NULLS FIRST, id DESC
-LIMIT 1`, userID, groupID).Scan(&existingID, &existingExpires)
+LIMIT 1
+FOR UPDATE`, userID, groupID).Scan(&existingID, &existingExpires, &existingNotes, &existingDeletedAt, &existingRevokedBy)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
 	if existingID > 0 {
+		if existingDeletedAt.Valid && sourceType == "manual" && managerID != userID &&
+			(!existingRevokedBy.Valid || existingRevokedBy.Int64 == userID) {
+			return nil, infraerrors.Conflict("SUBSCRIPTION_USER_UNSUBSCRIBED", "subscriber opted out of this group")
+		}
+		updatedNotes := existingNotes
+		if notes != "" {
+			if updatedNotes != "" {
+				updatedNotes += "\n"
+			}
+			updatedNotes += notes
+		}
+		if err := validateUserResourceNotes(updatedNotes); err != nil {
+			return nil, err
+		}
 		base := now
 		if existingExpires.After(now) {
 			base = existingExpires
@@ -3821,11 +4391,11 @@ LIMIT 1`, userID, groupID).Scan(&existingID, &existingExpires)
 		_, err = tx.ExecContext(ctx, `
 UPDATE user_subscriptions
 SET starts_at = CASE WHEN expires_at > NOW() THEN starts_at ELSE NOW() END,
-    expires_at = $1, status = 'active', assigned_by = $2, managed_by_user_id = $3,
-    source_type = $4, source_redeem_code_id = $5, assigned_at = NOW(),
-    notes = CASE WHEN $6 = '' THEN COALESCE(notes, '') ELSE CONCAT(COALESCE(notes, ''), CASE WHEN COALESCE(notes, '') = '' THEN '' ELSE E'\n' END, $6) END,
-    deleted_at = NULL, updated_at = NOW()
-WHERE id = $7`, expiresAt, managerID, managerID, sourceType, sourceRedeemCodeID, notes, existingID)
+		expires_at = $1, status = 'active', assigned_by = $2, managed_by_user_id = $3,
+		source_type = $4, source_redeem_code_id = $5, assigned_at = NOW(),
+		notes = $6,
+		deleted_at = NULL, revoked_by_user_id = NULL, updated_at = NOW()
+WHERE id = $7`, expiresAt, managerID, managerID, sourceType, sourceRedeemCodeID, updatedNotes, existingID)
 	} else {
 		_, err = tx.ExecContext(ctx, `
 INSERT INTO user_subscriptions (
@@ -3842,7 +4412,9 @@ INSERT INTO user_subscriptions (
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	s.invalidateSubscription(userID, groupID)
+	if err := s.invalidateSubscription(ctx, userID, groupID); err != nil {
+		return nil, err
+	}
 	return s.getAssignedSubscriptionByUserGroup(ctx, managerID, userID, groupID)
 }
 
@@ -3862,7 +4434,8 @@ SELECT EXISTS (
   SELECT 1
   FROM user_subscriptions us
   JOIN groups g ON g.id = us.group_id
-  WHERE us.id = $1 AND (us.managed_by_user_id = $2 OR g.owner_user_id = $2)
+	WHERE us.id = $1 AND g.deleted_at IS NULL AND g.status = 'active'
+    AND (us.managed_by_user_id = $2 OR g.owner_user_id = $2)
 )`, subscriptionID, ownerID).Scan(&ok)
 	if err != nil {
 		return err
@@ -3884,7 +4457,7 @@ SELECT us.id, us.user_id, u.email AS user_email, u.username AS username, us.grou
        g.platform AS group_platform, us.starts_at, us.expires_at, us.status,
        us.daily_usage_usd::double precision AS daily_usage_usd, us.weekly_usage_usd::double precision AS weekly_usage_usd,
        us.monthly_usage_usd::double precision AS monthly_usage_usd,
-       us.assigned_by, us.managed_by_user_id, us.source_type, us.source_redeem_code_id, us.assigned_at,
+       us.assigned_by, us.managed_by_user_id, us.source_type, us.source_redeem_code_id, us.revoked_by_user_id, us.assigned_at,
        COALESCE(us.notes, '') AS notes, us.created_at, us.updated_at, us.deleted_at
 FROM user_subscriptions us
 JOIN groups g ON g.id = us.group_id
@@ -4052,61 +4625,75 @@ func (s *UserResourceService) UnsubscribeOwnSubscription(ctx context.Context, us
 	if err := s.ensureDB(); err != nil {
 		return err
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
 	var groupID int64
-	err := s.db.QueryRowContext(ctx, `
-SELECT group_id
-FROM user_subscriptions
+	err = tx.QueryRowContext(ctx, `
+UPDATE user_subscriptions
+SET deleted_at = NOW(), revoked_by_user_id = $2, updated_at = NOW()
 WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
-LIMIT 1`, subscriptionID, userID).Scan(&groupID)
+RETURNING group_id`, subscriptionID, userID).Scan(&groupID)
 	if err == sql.ErrNoRows {
 		return ErrUserResourceNotFound
 	}
 	if err != nil {
 		return err
 	}
-	if s.subscriptionService != nil {
-		if err := s.subscriptionService.RevokeSubscription(ctx, subscriptionID); err != nil {
-			return err
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return s.invalidateSubscription(ctx, userID, groupID)
+}
+
+func (s *UserResourceService) invalidateGroupAuthCache(ctx context.Context, groupID int64) {
+	if groupID > 0 && s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, groupID)
+	}
+}
+
+func (s *UserResourceService) invalidateSubscription(ctx context.Context, userID, groupID int64) error {
+	if userID <= 0 || groupID <= 0 {
+		return nil
+	}
+	cacheCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if s.authCacheInvalidator != nil {
+		s.authCacheInvalidator.InvalidateAuthCacheByUserID(cacheCtx, userID)
+	}
+	var lastErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		if s.subscriptionService != nil {
+			lastErr = s.subscriptionService.InvalidateSubscriptionCaches(cacheCtx, userID, groupID)
+		} else if s.billingCacheService != nil {
+			lastErr = s.billingCacheService.InvalidateSubscription(cacheCtx, userID, groupID)
+		} else {
+			return nil
 		}
-	} else {
-		_, err = s.db.ExecContext(ctx, "UPDATE user_subscriptions SET deleted_at = NOW(), updated_at = NOW() WHERE id = $1", subscriptionID)
-		if err != nil {
-			return err
+		if lastErr == nil {
+			return nil
+		}
+		if attempt < 3 {
+			timer := time.NewTimer(time.Duration(attempt) * 50 * time.Millisecond)
+			select {
+			case <-cacheCtx.Done():
+				timer.Stop()
+				attempt = 3
+			case <-timer.C:
+			}
 		}
 	}
-	s.invalidateSubscription(userID, groupID)
+	if lastErr != nil {
+		slog.Error("subscription cache invalidation failed after commit", "user_id", userID, "group_id", groupID, "error", lastErr)
+	}
 	return nil
 }
 
-func (s *UserResourceService) invalidateGroup(ctx context.Context, groupID int64) {
-	if s.authCacheInvalidator != nil {
-		s.authCacheInvalidator.InvalidateAuthCacheByGroupID(ctx, groupID)
-	}
-	_ = s.enqueueSchedulerOutbox(ctx, SchedulerOutboxEventGroupChanged, nil, &groupID, nil)
-}
-
-func (s *UserResourceService) invalidateAccount(ctx context.Context, accountID int64) {
-	_ = s.enqueueSchedulerOutbox(ctx, SchedulerOutboxEventAccountChanged, &accountID, nil, nil)
-}
-
-func (s *UserResourceService) invalidateSubscription(userID, groupID int64) {
-	if userID <= 0 || groupID <= 0 {
-		return
-	}
-	if s.authCacheInvalidator != nil {
-		s.authCacheInvalidator.InvalidateAuthCacheByUserID(context.Background(), userID)
-	}
-	if s.subscriptionService != nil {
-		s.subscriptionService.InvalidateSubCache(userID, groupID)
-	}
-	if s.billingCacheService != nil {
-		_ = s.billingCacheService.InvalidateSubscription(context.Background(), userID, groupID)
-	}
-}
-
-func (s *UserResourceService) enqueueSchedulerOutbox(ctx context.Context, eventType string, accountID, groupID *int64, payload any) error {
-	if s.db == nil {
-		return nil
+func enqueueSchedulerOutboxWith(ctx context.Context, db userResourceDBTX, eventType string, accountID, groupID *int64, payload any) error {
+	if db == nil {
+		return errors.New("scheduler outbox database is unavailable")
 	}
 	var payloadText *string
 	if payload != nil {
@@ -4117,10 +4704,43 @@ func (s *UserResourceService) enqueueSchedulerOutbox(ctx context.Context, eventT
 		v := string(raw)
 		payloadText = &v
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err := db.ExecContext(ctx, `
 INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload, created_at)
 VALUES ($1, $2, $3, $4::jsonb, NOW())`, eventType, accountID, groupID, payloadText)
 	return err
+}
+
+func enqueueAccountChangeWith(ctx context.Context, db userResourceDBTX, accountID int64, groupIDs []int64) error {
+	if accountID <= 0 {
+		return errors.New("scheduler account id is invalid")
+	}
+	groupIDs = uniquePositiveInt64s(groupIDs)
+	var payload any
+	if len(groupIDs) > 0 {
+		payload = map[string]any{"group_ids": groupIDs}
+	}
+	return enqueueSchedulerOutboxWith(ctx, db, SchedulerOutboxEventAccountChanged, &accountID, nil, payload)
+}
+
+func enqueueAccountBulkChangeWith(ctx context.Context, db userResourceDBTX, accountIDs, groupIDs []int64) error {
+	accountIDs = uniquePositiveInt64s(accountIDs)
+	if len(accountIDs) == 0 {
+		return nil
+	}
+	payload := map[string]any{"account_ids": accountIDs}
+	if groupIDs = uniquePositiveInt64s(groupIDs); len(groupIDs) > 0 {
+		payload["group_ids"] = groupIDs
+	}
+	return enqueueSchedulerOutboxWith(ctx, db, SchedulerOutboxEventAccountBulkChanged, nil, nil, payload)
+}
+
+func enqueueGroupChangesWith(ctx context.Context, db userResourceDBTX, groupIDs []int64) error {
+	for _, groupID := range uniquePositiveInt64s(groupIDs) {
+		if err := enqueueSchedulerOutboxWith(ctx, db, SchedulerOutboxEventGroupChanged, nil, &groupID, nil); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func accountSelectSQL(alias string, includeProxy bool) string {
@@ -4504,19 +5124,27 @@ func redactUpstreamErrorItemsForUser(items []map[string]any, ownerID int64) {
 		if urToInt64(item["user_id"]) != ownerID {
 			item["user_id"] = nil
 			item["api_key_id"] = nil
+			item["client_request_id"] = ""
+			item["request_path"] = ""
 			item["user_agent"] = ""
+			// Upstream messages can echo prompts, email addresses or request
+			// fragments. A group owner may see the operational row, but not the
+			// subscriber's request contents.
+			item["message"] = "upstream request failed"
+			item["upstream_error_message"] = ""
+			item["upstream_errors"] = []any{}
 		} else {
 			item["user_agent"] = redactResourceText(urAsString(item["user_agent"]))
-		}
-		for _, key := range []string{
-			"message", "upstream_error_message", "request_path", "client_request_id",
-		} {
-			if value, ok := item[key]; ok && value != nil {
-				item[key] = redactResourceText(urAsString(value))
+			for _, key := range []string{
+				"message", "upstream_error_message", "request_path", "client_request_id",
+			} {
+				if value, ok := item[key]; ok && value != nil {
+					item[key] = redactResourceText(urAsString(value))
+				}
 			}
-		}
-		if value, ok := item["upstream_errors"]; ok {
-			item["upstream_errors"] = redactResourceValue(value)
+			if value, ok := item["upstream_errors"]; ok {
+				item["upstream_errors"] = redactResourceValue(value)
+			}
 		}
 	}
 }
@@ -4568,19 +5196,25 @@ func redactPublicProxy(item map[string]any, ownerID int64) {
 	if owned {
 		return
 	}
-	if toBool(item["is_public"]) {
-		item["owner_user_id"] = nil
-		item["host"] = ""
-		item["port"] = nil
-		item["username"] = ""
-		item["password"] = ""
-		item["has_auth"] = nil
-		item["backup_proxy_id"] = nil
-		item["ip_address"] = ""
-		item["latency_message"] = ""
-		item["details_hidden"] = true
-		item["extra"] = redactProxyExtra(item["extra"])
+
+	// Public proxy responses are an explicit metadata contract, not a blacklist.
+	// Proxy node formats evolve quickly and arbitrary extra fields can contain a
+	// complete share URI, credentials or private routing details.
+	allowed := map[string]struct{}{
+		"id": {}, "is_public": {}, "kind": {}, "name": {}, "protocol": {},
+		"status": {}, "expires_at": {}, "account_count": {},
+		"latency_status": {}, "latency_ms": {},
+		"country": {}, "country_code": {}, "region": {}, "city": {},
+		"quality_status": {}, "quality_score": {}, "quality_grade": {},
+		"quality_summary": {}, "quality_checked": {},
 	}
+	for key := range item {
+		if _, ok := allowed[key]; !ok {
+			delete(item, key)
+		}
+	}
+	item["is_owned"] = false
+	item["details_hidden"] = true
 }
 
 func RedactProxyPageForUserResponse(page *UserResourcePage) {
@@ -4618,6 +5252,12 @@ func RedactProxySourceSyncResultForUserResponse(result *ProxySourceSyncResult) {
 
 func RedactProxyForUserResponse(item map[string]any) {
 	if item == nil {
+		return
+	}
+	// redactPublicProxy already reduced foreign public proxies to an
+	// allowlisted metadata shape. Keep that contract stable instead of adding
+	// blank credential fields back during handler-level redaction.
+	if hidden, ok := item["details_hidden"].(bool); ok && hidden {
 		return
 	}
 	item["username"] = ""
@@ -4727,7 +5367,11 @@ func redactProxyExtraValue(value any) (any, bool) {
 		return out, redacted
 	case string:
 		lower := strings.ToLower(strings.TrimSpace(typed))
-		for _, prefix := range []string{"vmess://", "vless://", "trojan://", "ss://"} {
+		for _, prefix := range []string{
+			"vmess://", "vless://", "trojan://", "ss://",
+			"hysteria://", "hysteria2://", "hy2://", "tuic://",
+			"anytls://", "naive://", "wireguard://",
+		} {
 			if strings.HasPrefix(lower, prefix) {
 				return "", true
 			}
